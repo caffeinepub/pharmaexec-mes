@@ -16,7 +16,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -50,7 +49,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { helpContent } from "../data/helpContent";
@@ -703,6 +702,17 @@ export default function DataManager() {
   >("all");
   const [isLoading, setIsLoading] = useState(false);
 
+  const [isScrolled, setIsScrolled] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => setIsScrolled(el.scrollTop > 8);
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
   const filtered = nodes.filter(
     (n) =>
       (selectedEntityType === "all" || n.entityType === selectedEntityType) &&
@@ -852,11 +862,16 @@ export default function DataManager() {
       </div>
 
       {/* Split pane body */}
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* LEFT PANE */}
-        <div className="flex flex-col w-[60%] border-r border-border bg-white min-h-0">
+        <div className="flex flex-col flex-1 border-r border-border bg-white min-h-0">
           {/* Toolbar */}
-          <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0">
+          <div
+            className={cn(
+              "flex items-center gap-2 px-4 py-2.5 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0 sticky top-0 z-10 transition-shadow duration-200",
+              isScrolled && "shadow-[0_2px_8px_rgba(0,0,0,0.08)]",
+            )}
+          >
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -967,7 +982,10 @@ export default function DataManager() {
           </div>
 
           {/* Cards grid */}
-          <ScrollArea className="flex-1 min-h-0">
+          <div
+            ref={scrollRef}
+            className="flex-1 min-h-0 overflow-y-auto scroll-smooth"
+          >
             {isLoading ? (
               <div
                 className="flex items-center justify-center py-16 text-muted-foreground"
@@ -1038,7 +1056,7 @@ export default function DataManager() {
                 })}
               </div>
             )}
-          </ScrollArea>
+          </div>
 
           {/* Status bar */}
           <div className="flex items-center gap-3 px-4 py-1.5 border-t border-border bg-[oklch(0.975_0.004_240)] text-[11px] text-muted-foreground shrink-0">
@@ -1055,7 +1073,7 @@ export default function DataManager() {
         </div>
 
         {/* RIGHT PANE */}
-        <div className="flex flex-col w-[40%] bg-white min-h-0 overflow-y-auto">
+        <div className="flex flex-col w-[400px] shrink-0 bg-white min-h-0 overflow-y-auto">
           {currentNode ? (
             <>
               {/* Detail header */}
@@ -1173,7 +1191,7 @@ export default function DataManager() {
                   {/* BASIC TAB */}
                   <TabsContent
                     value="basic"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3 min-h-0"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 min-h-0 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Asset Attributes" />
                     <FieldRow label="Identifier">
@@ -1486,7 +1504,7 @@ export default function DataManager() {
                   {/* SPECIFICATION TAB */}
                   <TabsContent
                     value="spec"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Specification" />
                     <FieldRow label="Equipment Class">
@@ -1522,7 +1540,7 @@ export default function DataManager() {
                   {/* PROCESS TAB */}
                   <TabsContent
                     value="process"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Process Configuration" />
                     <div className="mb-3 text-[11.5px] text-muted-foreground">
@@ -1632,7 +1650,7 @@ export default function DataManager() {
                   {/* ENGINEERING TAB */}
                   <TabsContent
                     value="engineering"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Engineering Data" />
                     <FieldRow label="Data OPS path">
@@ -1674,7 +1692,7 @@ export default function DataManager() {
                   {/* LOGBOOK TAB */}
                   <TabsContent
                     value="logbook"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Logbook Entries" />
                     {currentNode.changeHistory.length === 0 ? (
@@ -1717,7 +1735,7 @@ export default function DataManager() {
                   {/* CHANGE HISTORY TAB */}
                   <TabsContent
                     value="history"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Change History" />
                     {currentNode.changeHistory.length === 0 ? (
