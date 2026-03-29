@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Cpu,
   HelpCircle,
+  Plus,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -155,6 +156,42 @@ export default function Dashboard() {
             <div className="text-[12px] text-muted-foreground">{dateStr}</div>
           </div>
         </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div
+        className="flex items-center gap-3 flex-wrap"
+        data-ocid="dashboard.quick_actions.section"
+      >
+        <span className="text-[12px] font-semibold text-muted-foreground uppercase tracking-wide">
+          Quick Actions:
+        </span>
+        <Button
+          size="sm"
+          className="gap-1.5 h-8 text-[13px]"
+          onClick={() => navigate({ to: "/batch-records" })}
+          data-ocid="dashboard.new_batch.button"
+        >
+          <Plus size={14} /> New Batch
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="gap-1.5 h-8 text-[13px]"
+          onClick={() => navigate({ to: "/deviations" })}
+          data-ocid="dashboard.new_deviation.button"
+        >
+          <AlertTriangle size={14} /> New Deviation
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="gap-1.5 h-8 text-[13px]"
+          onClick={() => navigate({ to: "/work-orders" })}
+          data-ocid="dashboard.new_work_order.button"
+        >
+          <ClipboardList size={14} /> New Work Order
+        </Button>
       </div>
 
       {/* KPI cards */}

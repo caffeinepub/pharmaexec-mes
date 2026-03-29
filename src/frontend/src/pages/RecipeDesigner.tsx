@@ -113,6 +113,7 @@ interface SFCNode {
   equip?: number;
   process?: number;
   privilege?: number;
+  tooltip?: string;
 }
 
 interface SFCEdge {
@@ -146,6 +147,7 @@ const SFC_NODES: SFCNode[] = [
     id: "n1",
     type: "phase",
     label: "Identify Material",
+    tooltip: "Select and verify the material to be used in this step",
     x: 140,
     y: 100,
     materialIn: 1,
@@ -158,6 +160,7 @@ const SFC_NODES: SFCNode[] = [
     id: "n2",
     type: "phase",
     label: "Select Scale",
+    tooltip: "Choose the weighing scale for material measurement",
     x: 140,
     y: 200,
     materialIn: 0,
@@ -170,6 +173,7 @@ const SFC_NODES: SFCNode[] = [
     id: "n3",
     type: "phase",
     label: "Tare Scale",
+    tooltip: "Reset scale to zero before weighing",
     x: 140,
     y: 300,
     materialIn: 0,
@@ -182,6 +186,7 @@ const SFC_NODES: SFCNode[] = [
     id: "n4",
     type: "phase",
     label: "Weigh Material",
+    tooltip: "Measure the required quantity of material",
     x: 140,
     y: 400,
     materialIn: 1,
@@ -197,6 +202,7 @@ const SFC_NODES: SFCNode[] = [
     id: "n5",
     type: "phase",
     label: "Release Scale (Pre)",
+    tooltip: "Confirm material is ready for next process step",
     x: 80,
     y: 560,
     materialIn: 0,
@@ -288,6 +294,124 @@ const SFC_EDGES: SFCEdge[] = [
   { from: "t_merge", to: "n8" },
   { from: "n8", to: "n9" },
   { from: "n9", to: "end" },
+];
+
+// Master Recipe top-level view
+const SFC_NODES_MASTERRECIPE: SFCNode[] = [
+  { id: "start", type: "start", label: "Start", x: 220, y: 30 },
+  {
+    id: "proc1",
+    type: "phase",
+    label: "Sonolin Retard 100 Procedure",
+    x: 140,
+    y: 100,
+    materialIn: 0,
+    materialOut: 0,
+    equip: 0,
+    process: 0,
+    privilege: 0,
+  },
+  { id: "end", type: "end", label: "End", x: 220, y: 210 },
+];
+const SFC_EDGES_MASTERRECIPE: SFCEdge[] = [
+  { from: "start", to: "proc1" },
+  { from: "proc1", to: "end" },
+];
+
+// Procedure view — unit procedures
+const SFC_NODES_PROCEDURE: SFCNode[] = [
+  { id: "start", type: "start", label: "Start", x: 220, y: 30 },
+  {
+    id: "up1",
+    type: "phase",
+    label: "Sonolin Retard 100 (Unit Procedure)",
+    x: 140,
+    y: 100,
+    materialIn: 0,
+    materialOut: 0,
+    equip: 0,
+    process: 1,
+    privilege: 0,
+  },
+  {
+    id: "up2",
+    type: "phase",
+    label: "Granulation",
+    x: 140,
+    y: 210,
+    materialIn: 1,
+    materialOut: 0,
+    equip: 1,
+    process: 2,
+    privilege: 0,
+  },
+  {
+    id: "up3",
+    type: "phase",
+    label: "Compression",
+    x: 140,
+    y: 320,
+    materialIn: 0,
+    materialOut: 1,
+    equip: 1,
+    process: 1,
+    privilege: 1,
+  },
+  { id: "end", type: "end", label: "End", x: 220, y: 430 },
+];
+const SFC_EDGES_PROCEDURE: SFCEdge[] = [
+  { from: "start", to: "up1" },
+  { from: "up1", to: "up2" },
+  { from: "up2", to: "up3" },
+  { from: "up3", to: "end" },
+];
+
+// Unit Procedure view — operations
+const SFC_NODES_UNITPROCEDURE: SFCNode[] = [
+  { id: "start", type: "start", label: "Start", x: 220, y: 30 },
+  {
+    id: "op1",
+    type: "phase",
+    label: "Dispensing",
+    x: 140,
+    y: 100,
+    materialIn: 1,
+    materialOut: 0,
+    equip: 1,
+    process: 1,
+    privilege: 1,
+  },
+  {
+    id: "op2",
+    type: "phase",
+    label: "Weighing",
+    x: 140,
+    y: 210,
+    materialIn: 1,
+    materialOut: 1,
+    equip: 1,
+    process: 2,
+    privilege: 1,
+  },
+  {
+    id: "op3",
+    type: "phase",
+    label: "Mixing",
+    x: 140,
+    y: 320,
+    materialIn: 0,
+    materialOut: 0,
+    equip: 1,
+    process: 1,
+    privilege: 0,
+  },
+  { id: "end", type: "end", label: "End", x: 220, y: 430 },
+];
+const SFC_EDGES_UNITPROCEDURE: SFCEdge[] = [
+  { from: "start", to: "op1" },
+  { from: "op1", to: "op2" },
+  { from: "op2", to: "op3" },
+  { from: "op3", to: "end" },
 ];
 
 const EXPLORER_TREE: TreeNode[] = [
@@ -675,6 +799,9 @@ function SFCCanvas({
               onClick={() => onSelect(n.id)}
               style={{ cursor: "pointer" }}
             >
+              <title>
+                Defines the condition to move to the next step in the workflow
+              </title>
               <rect
                 x={CX - 8}
                 y={n.y}
@@ -699,6 +826,7 @@ function SFCCanvas({
             onClick={() => onSelect(n.id)}
             style={{ cursor: "pointer" }}
           >
+            {n.tooltip && <title>{n.tooltip}</title>}
             <rect
               x={nx}
               y={ny}
@@ -844,47 +972,68 @@ function ExplorerNode({
     phase: <Square size={10} />,
   };
 
+  const typeTooltips: Record<string, string> = {
+    masterrecipe: "Defines the complete manufacturing process",
+    procedure: "Defines the complete manufacturing process",
+    unitprocedure: "Logical group of operations",
+    operation: "Specific manufacturing step",
+    phase: "Detailed execution step within operation",
+  };
+
   return (
     <div>
-      <div
-        className={cn(
-          "flex items-center gap-0.5 py-0.5 px-1 cursor-pointer text-xs select-none rounded-sm",
-          isSelected ? "bg-blue-800 text-white" : "hover:bg-gray-200",
-          node.status === "active" && !isSelected && "font-bold text-blue-900",
-        )}
-        style={{ paddingLeft: `${level * 12 + 4}px` }}
-        onKeyDown={(e: React.KeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            onSelect(node.id);
-            if (hasChildren) onToggle(node.id);
-          }
-        }}
-        onClick={() => {
-          onSelect(node.id);
-          if (hasChildren) onToggle(node.id);
-        }}
-      >
-        {hasChildren ? (
-          isExpanded ? (
-            <ChevronDown size={10} className="flex-shrink-0" />
-          ) : (
-            <ChevronRight size={10} className="flex-shrink-0" />
-          )
-        ) : (
-          <span className="w-2.5" />
-        )}
-        <span
-          className={cn(
-            "flex-shrink-0",
-            isSelected
-              ? "text-white"
-              : typeColors[node.type] || "text-gray-700",
+      <TooltipProvider delayDuration={400}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className={cn(
+                "flex items-center gap-0.5 py-0.5 px-1 cursor-pointer text-xs select-none rounded-sm",
+                isSelected ? "bg-blue-800 text-white" : "hover:bg-gray-200",
+                node.status === "active" &&
+                  !isSelected &&
+                  "font-bold text-blue-900",
+              )}
+              style={{ paddingLeft: `${level * 12 + 4}px` }}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  onSelect(node.id);
+                  if (hasChildren) onToggle(node.id);
+                }
+              }}
+              onClick={() => {
+                onSelect(node.id);
+                if (hasChildren) onToggle(node.id);
+              }}
+            >
+              {hasChildren ? (
+                isExpanded ? (
+                  <ChevronDown size={10} className="flex-shrink-0" />
+                ) : (
+                  <ChevronRight size={10} className="flex-shrink-0" />
+                )
+              ) : (
+                <span className="w-2.5" />
+              )}
+              <span
+                className={cn(
+                  "flex-shrink-0",
+                  isSelected
+                    ? "text-white"
+                    : typeColors[node.type] || "text-gray-700",
+                )}
+              >
+                {typeIcons[node.type]}
+              </span>
+              <span className="ml-0.5 truncate">{node.label}</span>
+            </div>
+          </TooltipTrigger>
+          {typeTooltips[node.type] && (
+            <TooltipContent side="right" className="text-xs max-w-[200px]">
+              {typeTooltips[node.type]}
+            </TooltipContent>
           )}
-        >
-          {typeIcons[node.type]}
-        </span>
-        <span className="ml-0.5 truncate">{node.label}</span>
-      </div>
+        </Tooltip>
+      </TooltipProvider>
       {isExpanded &&
         hasChildren &&
         node.children!.map((child) => (
@@ -2193,22 +2342,150 @@ export default function RecipeDesigner() {
                 : "white",
             }}
           >
-            <div
-              style={{
-                transform: `scale(${zoomLevel / 100})`,
-                transformOrigin: "top center",
-                padding: "16px",
-              }}
-            >
-              <SFCCanvas
-                nodes={SFC_NODES}
-                edges={SFC_EDGES}
-                selectedId={selectedNode}
-                onSelect={(id) => {
-                  setSelectedNode(id);
+            {activeSubTab === "mfc" ? (
+              <div className="p-4">
+                <div className="text-xs font-semibold text-gray-700 mb-2">
+                  Material Flow Control — Dispensing Operation
+                </div>
+                <table className="w-full border-collapse text-xs border border-gray-300">
+                  <thead>
+                    <tr className="bg-gray-200">
+                      <th className="border border-gray-300 px-2 py-1 text-left">
+                        Step
+                      </th>
+                      <th className="border border-gray-300 px-2 py-1 text-left">
+                        Material
+                      </th>
+                      <th className="border border-gray-300 px-2 py-1 text-right">
+                        Quantity
+                      </th>
+                      <th className="border border-gray-300 px-2 py-1 text-left">
+                        Unit
+                      </th>
+                      <th className="border border-gray-300 px-2 py-1 text-left">
+                        Direction
+                      </th>
+                      <th className="border border-gray-300 px-2 py-1 text-left">
+                        Equipment
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      {
+                        step: "Identify Material",
+                        material: "Sonolin API",
+                        qty: "100.00",
+                        unit: "g",
+                        dir: "IN",
+                        equip: "Balance WS-01",
+                      },
+                      {
+                        step: "Weigh Material",
+                        material: "Sonolin API",
+                        qty: "100.00",
+                        unit: "g",
+                        dir: "IN",
+                        equip: "Balance WS-01",
+                      },
+                      {
+                        step: "Weigh Material",
+                        material: "Excipient MCC-101",
+                        qty: "45.50",
+                        unit: "g",
+                        dir: "IN",
+                        equip: "Balance WS-01",
+                      },
+                      {
+                        step: "Weigh Material",
+                        material: "Lubricant MgSt",
+                        qty: "2.25",
+                        unit: "g",
+                        dir: "IN",
+                        equip: "Balance WS-02",
+                      },
+                      {
+                        step: "Account Materials",
+                        material: "Blend SR-100",
+                        qty: "147.75",
+                        unit: "g",
+                        dir: "OUT",
+                        equip: "Mixer MX-01",
+                      },
+                      {
+                        step: "Release Material",
+                        material: "Blend SR-100",
+                        qty: "147.75",
+                        unit: "g",
+                        dir: "OUT",
+                        equip: "—",
+                      },
+                    ].map((row, i) => (
+                      <tr
+                        key={row.step}
+                        className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                      >
+                        <td className="border border-gray-300 px-2 py-1">
+                          {row.step}
+                        </td>
+                        <td className="border border-gray-300 px-2 py-1 font-medium text-blue-700">
+                          {row.material}
+                        </td>
+                        <td className="border border-gray-300 px-2 py-1 text-right font-mono">
+                          {row.qty}
+                        </td>
+                        <td className="border border-gray-300 px-2 py-1">
+                          {row.unit}
+                        </td>
+                        <td className="border border-gray-300 px-2 py-1">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${row.dir === "IN" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}
+                          >
+                            {row.dir}
+                          </span>
+                        </td>
+                        <td className="border border-gray-300 px-2 py-1 text-gray-600">
+                          {row.equip}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div
+                style={{
+                  transform: `scale(${zoomLevel / 100})`,
+                  transformOrigin: "top center",
+                  padding: "16px",
                 }}
-              />
-            </div>
+              >
+                <SFCCanvas
+                  nodes={
+                    activeSubTab === "masterrecipe"
+                      ? SFC_NODES_MASTERRECIPE
+                      : activeSubTab === "procedure"
+                        ? SFC_NODES_PROCEDURE
+                        : activeSubTab === "unitprocedure"
+                          ? SFC_NODES_UNITPROCEDURE
+                          : SFC_NODES
+                  }
+                  edges={
+                    activeSubTab === "masterrecipe"
+                      ? SFC_EDGES_MASTERRECIPE
+                      : activeSubTab === "procedure"
+                        ? SFC_EDGES_PROCEDURE
+                        : activeSubTab === "unitprocedure"
+                          ? SFC_EDGES_UNITPROCEDURE
+                          : SFC_EDGES
+                  }
+                  selectedId={selectedNode}
+                  onSelect={(id) => {
+                    setSelectedNode(id);
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Breadcrumb */}
@@ -2283,11 +2560,31 @@ export default function RecipeDesigner() {
                     className="w-full"
                   >
                     {[
-                      { id: "material", label: "Material", items: [] },
+                      {
+                        id: "material",
+                        label: "Material",
+                        tooltip: "Material associated with this step",
+                        items: [],
+                      },
                       { id: "erpbom", label: "ERP BOM Item", items: [] },
-                      { id: "equip", label: "Equipment Class", items: [] },
-                      { id: "proptype", label: "Property Type", items: [] },
-                      { id: "workcenter", label: "Work Center", items: [] },
+                      {
+                        id: "equip",
+                        label: "Equipment Class",
+                        tooltip: "Type of equipment required for this step",
+                        items: [],
+                      },
+                      {
+                        id: "proptype",
+                        label: "Property Type",
+                        tooltip: "Defines parameter type used in process",
+                        items: [],
+                      },
+                      {
+                        id: "workcenter",
+                        label: "Work Center",
+                        tooltip: "Location where operation is performed",
+                        items: [],
+                      },
                       { id: "station", label: "Station", items: [] },
                       {
                         id: "privilege",
@@ -2306,7 +2603,23 @@ export default function RecipeDesigner() {
                         className="border-0"
                       >
                         <AccordionTrigger className="text-xs py-1 px-2 bg-gray-100 hover:bg-gray-200 border-b border-gray-200 font-medium text-gray-700 h-6 [&>svg]:h-3 [&>svg]:w-3">
-                          {section.label}{" "}
+                          {"tooltip" in section && section.tooltip ? (
+                            <TooltipProvider delayDuration={400}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span>{section.label}</span>
+                                </TooltipTrigger>
+                                <TooltipContent
+                                  side="left"
+                                  className="text-xs max-w-[200px]"
+                                >
+                                  {section.tooltip}
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          ) : (
+                            section.label
+                          )}{" "}
                           {section.items.length > 0 && (
                             <span className="ml-1 text-gray-400">
                               ({section.items.length})

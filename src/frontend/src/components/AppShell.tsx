@@ -181,7 +181,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto bg-background p-6">
+        <main className="flex-1 min-h-0 overflow-hidden bg-background p-6">
           {children}
         </main>
       </div>

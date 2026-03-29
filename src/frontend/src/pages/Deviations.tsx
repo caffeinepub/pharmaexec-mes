@@ -22,10 +22,12 @@ import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { DeviationSeverity } from "../backend";
+import { FieldTooltip } from "../components/FieldTooltip";
 import { HelpPanel } from "../components/HelpPanel";
 import { DeviationStatusBadge, SeverityBadge } from "../components/StatusBadge";
 import { helpContent } from "../data/helpContent";
 import { useAllDeviations, useReportDeviation } from "../hooks/useQueries";
+import { EQUIPMENT_LIST } from "../lib/mesData";
 
 export default function Deviations() {
   const navigate = useNavigate();
@@ -39,12 +41,23 @@ export default function Deviations() {
     batchRecordId: "",
     severity: DeviationSeverity.minor,
   });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = async () => {
+    const errors: Record<string, string> = {};
+    if (!form.title.trim()) errors.title = "Title is required";
+    if (!form.description.trim())
+      errors.description = "Description is required";
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+    setFormErrors({});
     try {
       await reportDeviation.mutateAsync(form);
       toast.success("Deviation reported");
       setModalOpen(false);
+      setFormErrors({});
       setForm({
         title: "",
         description: "",
@@ -201,68 +214,97 @@ export default function Deviations() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Title</Label>
-              <Input
-                data-ocid="deviations.title.input"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="Brief description of the deviation"
-              />
+              <Label>
+                Title <span className="text-destructive">*</span>
+              </Label>
+              <FieldTooltip tip="Enter a brief, clear title describing what deviation occurred (e.g. 'Temperature excursion during granulation')">
+                <Input
+                  data-ocid="deviations.title.input"
+                  value={form.title}
+                  onChange={(e) => {
+                    setForm({ ...form, title: e.target.value });
+                    setFormErrors((p) => ({ ...p, title: "" }));
+                  }}
+                  placeholder="Brief description of the deviation"
+                />
+              </FieldTooltip>
+              {formErrors.title && (
+                <p className="text-destructive text-[11px]">
+                  {formErrors.title}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Batch Record ID</Label>
-                <Input
-                  data-ocid="deviations.batch_id.input"
-                  value={form.batchRecordId}
-                  onChange={(e) =>
-                    setForm({ ...form, batchRecordId: e.target.value })
-                  }
-                  placeholder="B-2026-001"
-                />
+                <FieldTooltip tip="Enter the batch record ID affected by this deviation (e.g. B-2026-001). Leave blank if not linked to a batch.">
+                  <Input
+                    data-ocid="deviations.batch_id.input"
+                    value={form.batchRecordId}
+                    onChange={(e) =>
+                      setForm({ ...form, batchRecordId: e.target.value })
+                    }
+                    placeholder="B-2026-001"
+                  />
+                </FieldTooltip>
               </div>
               <div className="space-y-1.5">
                 <Label>Severity</Label>
-                <Select
-                  value={form.severity}
-                  onValueChange={(v) =>
-                    setForm({ ...form, severity: v as DeviationSeverity })
-                  }
-                >
-                  <SelectTrigger data-ocid="deviations.severity.select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={DeviationSeverity.critical}>
-                      Critical
-                    </SelectItem>
-                    <SelectItem value={DeviationSeverity.major}>
-                      Major
-                    </SelectItem>
-                    <SelectItem value={DeviationSeverity.minor}>
-                      Minor
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                <FieldTooltip tip="Select the severity level: Critical = immediate risk to patient safety, Major = significant impact, Minor = low impact, Observation = informational">
+                  <Select
+                    value={form.severity}
+                    onValueChange={(v) =>
+                      setForm({ ...form, severity: v as DeviationSeverity })
+                    }
+                  >
+                    <SelectTrigger data-ocid="deviations.severity.select">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={DeviationSeverity.critical}>
+                        Critical
+                      </SelectItem>
+                      <SelectItem value={DeviationSeverity.major}>
+                        Major
+                      </SelectItem>
+                      <SelectItem value={DeviationSeverity.minor}>
+                        Minor
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FieldTooltip>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Description</Label>
-              <Textarea
-                data-ocid="deviations.description.textarea"
-                value={form.description}
-                onChange={(e) =>
-                  setForm({ ...form, description: e.target.value })
-                }
-                placeholder="Detailed description of the deviation and observations"
-                rows={4}
-              />
+              <Label>
+                Description <span className="text-destructive">*</span>
+              </Label>
+              <FieldTooltip tip="Describe in detail what went wrong, what was observed, and when it happened. Be specific and factual.">
+                <Textarea
+                  data-ocid="deviations.description.textarea"
+                  value={form.description}
+                  onChange={(e) => {
+                    setForm({ ...form, description: e.target.value });
+                    setFormErrors((p) => ({ ...p, description: "" }));
+                  }}
+                  placeholder="Detailed description of the deviation and observations"
+                  rows={4}
+                />
+              </FieldTooltip>
+              {formErrors.description && (
+                <p className="text-destructive text-[11px]">
+                  {formErrors.description}
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setModalOpen(false)}
+              onClick={() => {
+                setModalOpen(false);
+                setFormErrors({});
+              }}
               data-ocid="deviations.report.cancel_button"
             >
               Cancel

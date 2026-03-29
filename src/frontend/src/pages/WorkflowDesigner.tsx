@@ -131,6 +131,43 @@ interface TreeNode {
   status?: string;
 }
 
+// ── Execution Types ────────────────────────────────────────────────────────
+type BranchPort = 0 | 1 | 2;
+
+interface StepInput {
+  id: string;
+  label: string;
+  type: "text" | "number" | "select";
+  required: boolean;
+  options?: string[];
+  min?: number;
+}
+
+interface StepTransition {
+  port: BranchPort;
+  nextStepId: string | null;
+  condition: string;
+}
+
+interface WorkflowStep {
+  id: string;
+  label: string;
+  description: string;
+  tooltip: string;
+  x: number;
+  y: number;
+  inputs: StepInput[];
+  transitions: StepTransition[];
+}
+
+type StepStatus = "pending" | "active" | "completed" | "failed" | "skipped";
+
+interface ExecutionLogEntry {
+  time: string;
+  type: "info" | "success" | "error" | "warning";
+  message: string;
+}
+
 // ── Sample Data ───────────────────────────────────────────────────────────────
 const WORKFLOW_TABS = [
   {
@@ -257,22 +294,22 @@ const WF_NODES: WFNode[] = [
 ];
 
 const WF_EDGES: WFEdge[] = [
-  { from: "start", to: "n1" },
-  { from: "n1", to: "n2" },
-  { from: "n2", to: "n3" },
-  { from: "n3", to: "t1" },
+  { from: "start", to: "n1", condition: "Batch order confirmed" },
+  { from: "n1", to: "n2", condition: "Equipment verified" },
+  { from: "n2", to: "n3", condition: "Parameter in spec" },
+  { from: "n3", to: "t1", condition: "Timer started" },
   // Left branch
-  { from: "t1", to: "n4", condition: "CONDITION" },
-  { from: "n4", to: "n5" },
-  { from: "n5", to: "t2" },
+  { from: "t1", to: "n4", condition: "Check required" },
+  { from: "n4", to: "n5", condition: "Checks complete" },
+  { from: "n5", to: "t2", condition: "Timer evaluated" },
   // Right branch
-  { from: "t1", to: "nr1", condition: "CONDITION" },
-  { from: "nr1", to: "t2" },
+  { from: "t1", to: "nr1", condition: "Monitor active" },
+  { from: "nr1", to: "t2", condition: "Monitoring done" },
   // Merge and continue
-  { from: "t2", to: "n6" },
-  { from: "n6", to: "n7" },
-  { from: "n7", to: "n8" },
-  { from: "n8", to: "end" },
+  { from: "t2", to: "n6", condition: "Branches merged" },
+  { from: "n6", to: "n7", condition: "Data collected" },
+  { from: "n7", to: "n8", condition: "Transition done" },
+  { from: "n8", to: "end", condition: "All steps complete" },
 ];
 
 const EXPLORER_TREE: TreeNode[] = [
@@ -438,6 +475,262 @@ const OPEN_WORKFLOWS = [
   },
 ];
 
+// ── Execution Steps ────────────────────────────────────────────────────────
+const WORKFLOW_STEPS: WorkflowStep[] = [
+  {
+    id: "identify_material",
+    label: "Identify Material",
+    description: "Select and verify the material to be used in this step.",
+    tooltip: "Select and verify the material to be used in this step",
+    x: 140,
+    y: 100,
+    inputs: [
+      {
+        id: "material_id",
+        label: "Material ID",
+        type: "select",
+        required: true,
+        options: [
+          "MAT-001 Paracetamol",
+          "MAT-002 Ibuprofen",
+          "MAT-003 Aspirin",
+        ],
+      },
+      { id: "lot_number", label: "Lot Number", type: "text", required: true },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "select_scale",
+        condition: "Material ID selected and Lot Number entered",
+      },
+      {
+        port: 0,
+        nextStepId: "identify_material",
+        condition: "Material not found or invalid — retry",
+      },
+      {
+        port: 2,
+        nextStepId: "quarantine_check",
+        condition: "Material requires quarantine check",
+      },
+    ],
+  },
+  {
+    id: "quarantine_check",
+    label: "Quarantine Check",
+    description: "Verify quarantine status before proceeding.",
+    tooltip: "Check if the material has been released from quarantine",
+    x: 140,
+    y: 200,
+    inputs: [
+      {
+        id: "quarantine_status",
+        label: "Quarantine Status",
+        type: "select",
+        required: true,
+        options: ["Cleared", "Hold", "Rejected"],
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "select_scale",
+        condition: "Material cleared from quarantine",
+      },
+      {
+        port: 0,
+        nextStepId: "identify_material",
+        condition: "Material rejected — restart identification",
+      },
+    ],
+  },
+  {
+    id: "select_scale",
+    label: "Select Scale",
+    description: "Choose the weighing scale and confirm calibration.",
+    tooltip: "Choose the weighing scale for material measurement",
+    x: 140,
+    y: 300,
+    inputs: [
+      {
+        id: "scale_id",
+        label: "Scale ID",
+        type: "select",
+        required: true,
+        options: [
+          "SCL-001 Analytical",
+          "SCL-002 Platform",
+          "SCL-003 Microbalance",
+        ],
+      },
+      {
+        id: "scale_calibration",
+        label: "Calibration Valid",
+        type: "select",
+        required: true,
+        options: ["Yes", "No"],
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "tare_scale",
+        condition: "Scale selected and calibration confirmed",
+      },
+      {
+        port: 0,
+        nextStepId: "select_scale",
+        condition: "Scale not calibrated — select another scale",
+      },
+    ],
+  },
+  {
+    id: "tare_scale",
+    label: "Tare Scale",
+    description: "Reset scale to zero before weighing.",
+    tooltip: "Reset scale to zero before weighing",
+    x: 140,
+    y: 400,
+    inputs: [
+      {
+        id: "tare_reading",
+        label: "Tare Reading (g)",
+        type: "number",
+        required: true,
+        min: 0,
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "weigh_material",
+        condition: "Tare reading is 0.00g — scale zeroed",
+      },
+      {
+        port: 0,
+        nextStepId: "tare_scale",
+        condition: "Tare reading not zero — retry tare",
+      },
+    ],
+  },
+  {
+    id: "weigh_material",
+    label: "Weigh Material",
+    description: "Measure the required quantity of material.",
+    tooltip: "Measure the required quantity of material",
+    x: 140,
+    y: 500,
+    inputs: [
+      {
+        id: "actual_weight",
+        label: "Actual Weight (g)",
+        type: "number",
+        required: true,
+        min: 0.01,
+      },
+      {
+        id: "target_weight",
+        label: "Target Weight (g)",
+        type: "number",
+        required: true,
+        min: 0.01,
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "release_material",
+        condition: "Weight within ±2% of target",
+      },
+      {
+        port: 0,
+        nextStepId: "weigh_material",
+        condition: "Weight out of range — reweigh",
+      },
+      {
+        port: 2,
+        nextStepId: "supervisor_review",
+        condition: "Weight deviation >2% — supervisor review required",
+      },
+    ],
+  },
+  {
+    id: "supervisor_review",
+    label: "Supervisor Review",
+    description: "Supervisor reviews and approves weight deviation.",
+    tooltip: "Supervisor reviews weight deviation and approves or rejects",
+    x: 140,
+    y: 600,
+    inputs: [
+      {
+        id: "supervisor_decision",
+        label: "Supervisor Decision",
+        type: "select",
+        required: true,
+        options: ["Approve", "Reject", "Reweigh"],
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: "release_material",
+        condition: "Supervisor approved weight deviation",
+      },
+      {
+        port: 0,
+        nextStepId: "weigh_material",
+        condition: "Supervisor rejected — reweigh required",
+      },
+    ],
+  },
+  {
+    id: "release_material",
+    label: "Release Material",
+    description: "Confirm material is ready for next process step.",
+    tooltip: "Confirm material is ready for next process step",
+    x: 140,
+    y: 700,
+    inputs: [
+      {
+        id: "release_confirmation",
+        label: "Release Confirmation",
+        type: "select",
+        required: true,
+        options: ["Confirmed", "On Hold"],
+      },
+      {
+        id: "release_notes",
+        label: "Release Notes",
+        type: "text",
+        required: false,
+      },
+    ],
+    transitions: [
+      {
+        port: 1,
+        nextStepId: null,
+        condition: "Material released — workflow complete",
+      },
+      {
+        port: 0,
+        nextStepId: "weigh_material",
+        condition: "Material on hold — return to weighing",
+      },
+    ],
+  },
+];
+
+const STEP_ORDER = [
+  "identify_material",
+  "quarantine_check",
+  "select_scale",
+  "tare_scale",
+  "weigh_material",
+  "supervisor_review",
+  "release_material",
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const NODE_W = 140;
 const NODE_H = 40;
@@ -493,11 +786,15 @@ function WFSFCCanvas({
   edges,
   selectedId,
   onSelect,
+  stepStatuses = {},
+  activeStepId = "",
 }: {
   nodes: WFNode[];
   edges: WFEdge[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  stepStatuses?: Record<string, StepStatus>;
+  activeStepId?: string;
 }) {
   const nodeMap: Record<string, WFNode> = {};
   for (const n of nodes) nodeMap[n.id] = n;
@@ -510,6 +807,15 @@ function WFSFCCanvas({
       height="1100"
       style={{ display: "block" }}
     >
+      <defs>
+        <filter id="activeGlow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+          <feMerge>
+            <feMergeNode in="coloredBlur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
       {/* Edges */}
       {edges.map((e) => {
         const fn = nodeMap[e.from];
@@ -604,6 +910,10 @@ function WFSFCCanvas({
               }}
               style={{ cursor: "pointer" }}
             >
+              <title>
+                Workflow begins here. Ensure batch order is created and
+                confirmed before starting.
+              </title>
               <ellipse cx={CX} cy={n.y + 15} rx={28} ry={14} fill="#1a4480" />
               <text
                 x={CX}
@@ -628,6 +938,9 @@ function WFSFCCanvas({
               }}
               style={{ cursor: "pointer" }}
             >
+              <title>
+                Workflow complete. Batch is ready for final review and release.
+              </title>
               <ellipse
                 cx={CX}
                 cy={n.y + 15}
@@ -676,6 +989,33 @@ function WFSFCCanvas({
         // Phase node
         const nx = n.x;
         const ny = n.y;
+        const phaseTooltip =
+          n.label.toLowerCase().includes("equip") ||
+          n.label.toLowerCase().includes("identify")
+            ? "Select and verify equipment before starting this operation. Confirm equipment status is Available."
+            : n.label.toLowerCase().includes("process") ||
+                n.label.toLowerCase().includes("value") ||
+                n.label.toLowerCase().includes("timer")
+              ? "Enter or capture the process parameter value. Value must be within the defined specification range."
+              : n.label.toLowerCase().includes("material") ||
+                  n.label.toLowerCase().includes("dispens")
+                ? "Enter or scan material information. Verify weight, lot number, and material status."
+                : n.label.toLowerCase().includes("check") ||
+                    n.label.toLowerCase().includes("review") ||
+                    n.label.toLowerCase().includes("evaluat")
+                  ? "Review all parameters entered for this step. Confirm all values are within the acceptable range."
+                  : n.label.toLowerCase().includes("monitor")
+                    ? "Monitor equipment parameters during operation. Alert supervisor if any value exceeds limits."
+                    : n.label.toLowerCase().includes("logbook") ||
+                        n.label.toLowerCase().includes("entry")
+                      ? "Record all observations and activities in the logbook. All entries must be signed."
+                      : n.label.toLowerCase().includes("machine") ||
+                          n.label.toLowerCase().includes("data")
+                        ? "Capture machine data and process parameters. Ensure all readings are recorded accurately."
+                        : n.label.toLowerCase().includes("transition") ||
+                            n.label.toLowerCase().includes("perform")
+                          ? "Execute the transition operation. Verify all pre-conditions are met before proceeding."
+                          : "Complete all required actions for this step before proceeding to the next workflow step.";
         return (
           <g
             key={n.id}
@@ -685,16 +1025,42 @@ function WFSFCCanvas({
             }}
             style={{ cursor: "pointer" }}
           >
-            <rect
-              x={nx}
-              y={ny}
-              width={NODE_W}
-              height={NODE_H}
-              fill={isSelected ? "#EBF5FB" : "#F0F8FF"}
-              stroke={isSelected ? "#1a4480" : "#7F8C8D"}
-              strokeWidth={isSelected ? 2 : 1}
-              rx={2}
-            />
+            <title>{phaseTooltip}</title>
+            {(() => {
+              const execStatus = stepStatuses[n.id];
+              const isActiveExec = activeStepId === n.id;
+              let fillColor = isSelected ? "#EBF5FB" : "#F0F8FF";
+              let strokeColor = isSelected ? "#1a4480" : "#7F8C8D";
+              let strokeW = isSelected ? 2 : 1;
+              let filterAttr: string | undefined;
+              if (isActiveExec) {
+                fillColor = "#dbeafe";
+                strokeColor = "#2563eb";
+                strokeW = 2.5;
+                filterAttr = "url(#activeGlow)";
+              } else if (execStatus === "completed") {
+                fillColor = "#dcfce7";
+                strokeColor = "#16a34a";
+                strokeW = 2;
+              } else if (execStatus === "failed") {
+                fillColor = "#fee2e2";
+                strokeColor = "#dc2626";
+                strokeW = 2;
+              }
+              return (
+                <rect
+                  x={nx}
+                  y={ny}
+                  width={NODE_W}
+                  height={NODE_H}
+                  fill={fillColor}
+                  stroke={strokeColor}
+                  strokeWidth={strokeW}
+                  rx={2}
+                  filter={filterAttr}
+                />
+              );
+            })()}
             <text
               x={nx + NODE_W / 2}
               y={ny + NODE_H / 2 - 4}
@@ -785,6 +1151,106 @@ function WFSFCCanvas({
             >
               {n.status ?? "-"}
             </text>
+            {/* Execution port badges */}
+            {(() => {
+              const step = WORKFLOW_STEPS.find((s) => s.id === n.id);
+              if (!step) return null;
+              const ports = step.transitions.map((t) => t.port);
+              return (
+                <>
+                  {/* Port 1 (success) top-right */}
+                  {ports.includes(1) && (
+                    <g>
+                      <circle
+                        cx={nx + NODE_W - 6}
+                        cy={ny - 6}
+                        r={7}
+                        fill="#16a34a"
+                        stroke="white"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={nx + NODE_W - 6}
+                        y={ny - 3}
+                        textAnchor="middle"
+                        fontSize={8}
+                        fill="white"
+                        fontWeight="bold"
+                      >
+                        1
+                      </text>
+                    </g>
+                  )}
+                  {/* Port 0 (failure) bottom-left */}
+                  {ports.includes(0) && (
+                    <g>
+                      <circle
+                        cx={nx + 6}
+                        cy={ny + NODE_H + 6}
+                        r={7}
+                        fill="#dc2626"
+                        stroke="white"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={nx + 6}
+                        y={ny + NODE_H + 9}
+                        textAnchor="middle"
+                        fontSize={8}
+                        fill="white"
+                        fontWeight="bold"
+                      >
+                        0
+                      </text>
+                    </g>
+                  )}
+                  {/* Port 2 (alternative) bottom-right */}
+                  {ports.includes(2) && (
+                    <g>
+                      <circle
+                        cx={nx + NODE_W - 6}
+                        cy={ny + NODE_H + 6}
+                        r={7}
+                        fill="#ca8a04"
+                        stroke="white"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={nx + NODE_W - 6}
+                        y={ny + NODE_H + 9}
+                        textAnchor="middle"
+                        fontSize={8}
+                        fill="white"
+                        fontWeight="bold"
+                      >
+                        2
+                      </text>
+                    </g>
+                  )}
+                  {/* Active indicator */}
+                  {activeStepId === n.id && (
+                    <g>
+                      <circle
+                        cx={nx + NODE_W / 2}
+                        cy={ny - 8}
+                        r={5}
+                        fill="#2563eb"
+                      />
+                      <text
+                        x={nx + NODE_W / 2}
+                        y={ny - 5}
+                        textAnchor="middle"
+                        fontSize={8}
+                        fill="white"
+                        fontWeight="bold"
+                      >
+                        ▶
+                      </text>
+                    </g>
+                  )}
+                </>
+              );
+            })()}
           </g>
         );
       })}
@@ -1430,7 +1896,21 @@ export default function WorkflowDesigner() {
   // Graph state
   const [selectedNode, setSelectedNode] = useState<string | null>("n4");
   const [activeTab, setActiveTab] = useState("wf1");
+  const [activeSubTab, setActiveSubTab] = useState("phase");
   const [zoomLevel, setZoomLevel] = useState(100);
+
+  // Execution engine state
+  const [activeStepId, setActiveStepId] = useState<string>("");
+  const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>(
+    {},
+  );
+  const [stepInputValues, setStepInputValues] = useState<
+    Record<string, Record<string, string>>
+  >({});
+  const [selectedBranch, setSelectedBranch] = useState<BranchPort>(1);
+  const [executionLog, setExecutionLog] = useState<ExecutionLogEntry[]>([]);
+  const [workflowStarted, setWorkflowStarted] = useState(false);
+  const [execError, setExecError] = useState<string>("");
 
   // Explorer/tree state
   const [selectedTreeId, setSelectedTreeId] = useState("op1");
@@ -1514,6 +1994,109 @@ export default function WorkflowDesigner() {
     minute: "2-digit",
     second: "2-digit",
   });
+
+  function addLog(
+    type: "info" | "success" | "error" | "warning",
+    message: string,
+  ) {
+    const now = new Date();
+    const time = now.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    setExecutionLog((prev) => [...prev, { time, type, message }]);
+  }
+
+  function startWorkflow() {
+    setWorkflowStarted(true);
+    setActiveStepId("identify_material");
+    setStepStatuses({ identify_material: "active" });
+    setStepInputValues({});
+    setExecutionLog([]);
+    setExecError("");
+    setSelectedBranch(1);
+    setBottomTab("execlog");
+    addLog(
+      "info",
+      "Workflow started — Step 1: Identify Material is now active",
+    );
+    toast.success("Workflow execution started");
+  }
+
+  function resetWorkflow() {
+    setWorkflowStarted(false);
+    setActiveStepId("");
+    setStepStatuses({});
+    setStepInputValues({});
+    setExecutionLog([]);
+    setExecError("");
+    setSelectedBranch(1);
+    toast.info("Workflow reset");
+  }
+
+  function executeStep(stepId: string, port: BranchPort) {
+    const step = WORKFLOW_STEPS.find((s) => s.id === stepId);
+    if (!step) return;
+    const inputs = stepInputValues[stepId] || {};
+    const missingInputs = step.inputs.filter(
+      (i) => i.required && !inputs[i.id]?.trim(),
+    );
+    if (missingInputs.length > 0) {
+      const msg = `Cannot proceed: Missing required fields: ${missingInputs.map((i) => i.label).join(", ")}`;
+      setExecError(msg);
+      addLog("error", msg);
+      return;
+    }
+    setExecError("");
+    const transition = step.transitions.find((t) => t.port === port);
+    if (!transition) {
+      const msg = `No transition defined for port ${port} on step "${step.label}"`;
+      setExecError(msg);
+      addLog("error", msg);
+      return;
+    }
+    const newStatus: StepStatus = port === 0 ? "failed" : "completed";
+    setStepStatuses((prev) => ({ ...prev, [stepId]: newStatus }));
+    addLog(
+      port === 1 ? "success" : port === 0 ? "error" : "warning",
+      `Step "${step.label}" — Branch ${port}: ${transition.condition}`,
+    );
+    if (transition.nextStepId) {
+      setActiveStepId(transition.nextStepId);
+      setStepStatuses((prev) => ({
+        ...prev,
+        [transition.nextStepId!]: "active",
+      }));
+      const nextStep = WORKFLOW_STEPS.find(
+        (s) => s.id === transition.nextStepId,
+      );
+      addLog("info", `Moving to: ${nextStep?.label}`);
+      setSelectedBranch(1);
+    } else {
+      setActiveStepId("");
+      addLog(
+        "success",
+        "✓ Workflow completed successfully! All materials released.",
+      );
+      toast.success("Workflow completed!");
+    }
+  }
+
+  function setInputValue(stepId: string, inputId: string, value: string) {
+    setStepInputValues((prev) => ({
+      ...prev,
+      [stepId]: { ...(prev[stepId] || {}), [inputId]: value },
+    }));
+    if (execError) setExecError("");
+  }
+
+  const activeStep = WORKFLOW_STEPS.find((s) => s.id === activeStepId);
+  const activeStepInputs = stepInputValues[activeStepId] || {};
+  const availablePorts = activeStep?.transitions.map((t) => t.port) || [];
+  const selectedTransition = activeStep?.transitions.find(
+    (t) => t.port === selectedBranch,
+  );
 
   return (
     <div
@@ -2077,43 +2660,215 @@ export default function WorkflowDesigner() {
             className="flex border-b border-gray-300 bg-gray-100 flex-shrink-0"
             style={{ height: "20px" }}
           >
-            {["Unit Procedure", "Operation", "Phase"].map((t) => (
+            {[
+              { id: "unitprocedure", label: "Unit Procedure" },
+              { id: "operation", label: "Operation" },
+              { id: "phase", label: "Phase" },
+            ].map((t) => (
               <button
                 type="button"
-                key={t}
-                className="text-xs px-2 border-r border-gray-300 hover:bg-gray-200"
+                key={t.id}
+                onClick={() => setActiveSubTab(t.id)}
+                className={cn(
+                  "text-xs px-2 border-r border-gray-300",
+                  activeSubTab === t.id
+                    ? "bg-white font-semibold"
+                    : "hover:bg-gray-200",
+                )}
               >
-                {t}
+                {t.label}
               </button>
             ))}
           </div>
 
-          {/* SFC Graph */}
-          <ScrollArea className="flex-1">
-            <div
-              className="relative min-h-full"
-              style={{
-                transform: `scale(${zoomLevel / 100})`,
-                transformOrigin: "top left",
-                backgroundImage: showGrid
-                  ? "radial-gradient(circle, #ccc 1px, transparent 1px)"
-                  : undefined,
-                backgroundSize: showGrid ? "20px 20px" : undefined,
-              }}
-            >
-              <WFSFCCanvas
-                nodes={WF_NODES}
-                edges={WF_EDGES}
-                selectedId={selectedNode}
-                onSelect={(id) => {
-                  setSelectedNode(id);
-                  toast.info(
-                    `Selected: ${WF_NODES.find((n) => n.id === id)?.label ?? id}`,
-                  );
-                }}
-              />
+          {/* SFC Graph / Sub-tab content */}
+          {activeSubTab === "unitprocedure" ? (
+            <div className="flex-1 overflow-auto p-4 bg-white">
+              <div className="text-xs font-semibold text-gray-700 mb-3">
+                Unit Procedures
+              </div>
+              <table className="w-full border-collapse text-xs border border-gray-300">
+                <thead>
+                  <tr className="bg-gray-200">
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      ID
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Name
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Equipment Class
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Status
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    {
+                      id: "UP-001",
+                      name: "Dispensing Unit Procedure",
+                      equip: "Balance Station",
+                      status: "Active",
+                    },
+                    {
+                      id: "UP-002",
+                      name: "Processing Unit Procedure",
+                      equip: "Mixer Station",
+                      status: "Pending",
+                    },
+                  ].map((row, i) => (
+                    <tr
+                      key={row.id}
+                      className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    >
+                      <td className="border border-gray-300 px-2 py-1 font-mono">
+                        {row.id}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1 font-medium">
+                        {row.name}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1 text-gray-600">
+                        {row.equip}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${row.status === "Active" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}
+                        >
+                          {row.status}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </ScrollArea>
+          ) : activeSubTab === "operation" ? (
+            <div className="flex-1 overflow-auto p-4 bg-white">
+              <div className="text-xs font-semibold text-gray-700 mb-3">
+                Operations
+              </div>
+              <table className="w-full border-collapse text-xs border border-gray-300">
+                <thead>
+                  <tr className="bg-gray-200">
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Step
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Operation
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      Start Condition
+                    </th>
+                    <th className="border border-gray-300 px-2 py-1 text-left">
+                      End Condition
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    {
+                      step: "1",
+                      op: "Identify Equipment",
+                      start: "Workflow started",
+                      end: "Equipment ID confirmed",
+                    },
+                    {
+                      step: "2",
+                      op: "Get Process Value",
+                      start: "Equipment ready",
+                      end: "Value captured",
+                    },
+                    {
+                      step: "3",
+                      op: "Start Timer",
+                      start: "Process value OK",
+                      end: "Timer running",
+                    },
+                    {
+                      step: "4",
+                      op: "In-Process Checks",
+                      start: "Timer started",
+                      end: "Check passed",
+                    },
+                    {
+                      step: "5",
+                      op: "Evaluate Timer",
+                      start: "Checks complete",
+                      end: "Timer evaluated",
+                    },
+                    {
+                      step: "6",
+                      op: "Get Machine Data",
+                      start: "Timer OK",
+                      end: "Data recorded",
+                    },
+                    {
+                      step: "7",
+                      op: "Perform Transition",
+                      start: "Data complete",
+                      end: "Transition done",
+                    },
+                    {
+                      step: "8",
+                      op: "Make Logbook Entry",
+                      start: "Transition OK",
+                      end: "Entry logged",
+                    },
+                  ].map((row, i) => (
+                    <tr
+                      key={row.step}
+                      className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    >
+                      <td className="border border-gray-300 px-2 py-1 font-mono text-center">
+                        {row.step}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1 font-medium">
+                        {row.op}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1 text-gray-600 text-[10px]">
+                        {row.start}
+                      </td>
+                      <td className="border border-gray-300 px-2 py-1 text-gray-600 text-[10px]">
+                        {row.end}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <ScrollArea className="flex-1">
+              <div
+                className="relative min-h-full"
+                style={{
+                  transform: `scale(${zoomLevel / 100})`,
+                  transformOrigin: "top left",
+                  backgroundImage: showGrid
+                    ? "radial-gradient(circle, #ccc 1px, transparent 1px)"
+                    : undefined,
+                  backgroundSize: showGrid ? "20px 20px" : undefined,
+                }}
+              >
+                <WFSFCCanvas
+                  nodes={WF_NODES}
+                  edges={WF_EDGES}
+                  selectedId={selectedNode}
+                  onSelect={(id) => {
+                    setSelectedNode(id);
+                    const wfNode = WF_NODES.find((n) => n.id === id);
+                    const exStep = WORKFLOW_STEPS.find((s) => s.id === id);
+                    toast.info(
+                      `Selected: ${exStep?.label ?? wfNode?.label ?? id}`,
+                    );
+                  }}
+                  stepStatuses={stepStatuses}
+                  activeStepId={activeStepId}
+                />
+              </div>
+            </ScrollArea>
+          )}
         </div>
 
         {/* ── Right Panels ──────────────────────────────────────── */}
@@ -2269,6 +3024,238 @@ export default function WorkflowDesigner() {
                 </ScrollArea>
               </div>
             )}
+
+            {/* Execution Panel */}
+            <div
+              className="flex flex-col overflow-hidden border-b border-gray-400"
+              style={{
+                minHeight: workflowStarted ? "300px" : "60px",
+                maxHeight: "420px",
+              }}
+            >
+              <div className="bg-blue-900 text-white px-2 py-0.5 flex items-center justify-between flex-shrink-0">
+                <span className="text-xs font-semibold flex items-center gap-1">
+                  ▶ Execution Engine
+                </span>
+                {workflowStarted && (
+                  <button
+                    type="button"
+                    onClick={resetWorkflow}
+                    className="text-xs text-blue-300 hover:text-white"
+                    data-ocid="wf_exec.reset_button"
+                    title="Reset workflow"
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+
+              {!workflowStarted ? (
+                <div className="flex flex-col items-center justify-center p-3 gap-2 bg-blue-50">
+                  <p className="text-xs text-gray-600 text-center">
+                    Start step-by-step workflow execution
+                  </p>
+                  <button
+                    type="button"
+                    onClick={startWorkflow}
+                    className="text-xs px-3 py-1.5 bg-blue-700 text-white rounded font-semibold hover:bg-blue-800 active:bg-blue-900 w-full"
+                    data-ocid="wf_exec.start_button"
+                  >
+                    ▶ Start Workflow
+                  </button>
+                </div>
+              ) : activeStep ? (
+                <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-white">
+                  {/* Step header */}
+                  <div className="bg-blue-50 border border-blue-200 rounded p-1.5">
+                    <div className="flex items-center gap-1 mb-0.5">
+                      <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse flex-shrink-0" />
+                      <span className="text-xs font-semibold text-blue-900">
+                        {activeStep.label}
+                      </span>
+                    </div>
+                    <p
+                      className="text-xs text-blue-700"
+                      style={{ fontSize: "10px" }}
+                    >
+                      {activeStep.description}
+                    </p>
+                  </div>
+
+                  {/* Progress indicators */}
+                  <div className="flex flex-wrap gap-1">
+                    {STEP_ORDER.filter((sid) =>
+                      WORKFLOW_STEPS.find((s) => s.id === sid),
+                    ).map((sid) => {
+                      const st = stepStatuses[sid];
+                      const isAct = activeStepId === sid;
+                      return (
+                        <span
+                          key={sid}
+                          className={cn(
+                            "text-xs px-1 py-0.5 rounded",
+                            isAct
+                              ? "bg-blue-600 text-white font-bold"
+                              : st === "completed"
+                                ? "bg-green-100 text-green-700"
+                                : st === "failed"
+                                  ? "bg-red-100 text-red-700"
+                                  : "bg-gray-100 text-gray-500",
+                          )}
+                          style={{ fontSize: "9px" }}
+                        >
+                          {WORKFLOW_STEPS.find(
+                            (s) => s.id === sid,
+                          )?.label?.split(" ")[0] ?? sid}
+                        </span>
+                      );
+                    })}
+                  </div>
+
+                  {/* Input fields */}
+                  {activeStep.inputs.length > 0 && (
+                    <div className="space-y-1.5">
+                      {activeStep.inputs.map((inp) => (
+                        <div key={inp.id}>
+                          <label
+                            htmlFor={`exec-inp-${inp.id}`}
+                            className="text-xs text-gray-600 block mb-0.5"
+                          >
+                            {inp.label}
+                            {inp.required && (
+                              <span className="text-red-500 ml-0.5">*</span>
+                            )}
+                          </label>
+                          {inp.type === "select" ? (
+                            <select
+                              value={activeStepInputs[inp.id] ?? ""}
+                              onChange={(e) =>
+                                setInputValue(
+                                  activeStepId,
+                                  inp.id,
+                                  e.target.value,
+                                )
+                              }
+                              id={`exec-inp-${inp.id}`}
+                              className="w-full text-xs border border-gray-300 rounded px-1 py-0.5 bg-white focus:border-blue-400 focus:outline-none"
+                              style={{ height: "22px" }}
+                              data-ocid={`wf_exec.${inp.id}.select`}
+                            >
+                              <option value="">— Select —</option>
+                              {inp.options?.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <input
+                              id={`exec-inp-${inp.id}`}
+                              type={inp.type}
+                              value={activeStepInputs[inp.id] ?? ""}
+                              onChange={(e) =>
+                                setInputValue(
+                                  activeStepId,
+                                  inp.id,
+                                  e.target.value,
+                                )
+                              }
+                              min={inp.min}
+                              placeholder={
+                                inp.required ? "Required" : "Optional"
+                              }
+                              className="w-full text-xs border border-gray-300 rounded px-1 py-0.5 focus:border-blue-400 focus:outline-none"
+                              style={{ height: "22px" }}
+                              data-ocid={`wf_exec.${inp.id}.input`}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Branch selector */}
+                  <div>
+                    <span className="text-xs text-gray-600 block mb-1">
+                      Branch / Exit Port:
+                    </span>
+                    <div className="flex gap-1 flex-wrap">
+                      {availablePorts.map((port) => (
+                        <button
+                          type="button"
+                          key={port}
+                          onClick={() => setSelectedBranch(port)}
+                          className={cn(
+                            "text-xs px-2 py-0.5 rounded border font-semibold",
+                            selectedBranch === port
+                              ? port === 1
+                                ? "bg-green-600 text-white border-green-600"
+                                : port === 0
+                                  ? "bg-red-600 text-white border-red-600"
+                                  : "bg-yellow-500 text-white border-yellow-500"
+                              : port === 1
+                                ? "border-green-400 text-green-700 hover:bg-green-50"
+                                : port === 0
+                                  ? "border-red-400 text-red-700 hover:bg-red-50"
+                                  : "border-yellow-400 text-yellow-700 hover:bg-yellow-50",
+                          )}
+                          data-ocid={`wf_exec.branch_${port}.toggle`}
+                        >
+                          {port === 1
+                            ? "1 Success"
+                            : port === 0
+                              ? "0 Failure"
+                              : "2 Alternative"}
+                        </button>
+                      ))}
+                    </div>
+                    {selectedTransition && (
+                      <p
+                        className="text-xs text-gray-500 mt-1 italic"
+                        style={{ fontSize: "10px" }}
+                      >
+                        {selectedTransition.condition}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Error message */}
+                  {execError && (
+                    <div
+                      className="bg-red-50 border border-red-200 rounded p-1.5"
+                      data-ocid="wf_exec.error_state"
+                    >
+                      <p className="text-xs text-red-700">{execError}</p>
+                    </div>
+                  )}
+
+                  {/* Execute button */}
+                  <button
+                    type="button"
+                    onClick={() => executeStep(activeStepId, selectedBranch)}
+                    className="w-full text-xs px-2 py-1.5 bg-blue-700 text-white rounded font-semibold hover:bg-blue-800 active:bg-blue-900"
+                    data-ocid="wf_exec.execute_button"
+                  >
+                    Execute Step →
+                  </button>
+                </div>
+              ) : workflowStarted ? (
+                <div className="flex flex-col items-center justify-center p-3 gap-2 bg-green-50">
+                  <div className="text-green-600 text-lg">✓</div>
+                  <p className="text-xs text-green-700 font-semibold text-center">
+                    Workflow Complete!
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resetWorkflow}
+                    className="text-xs px-3 py-1 bg-gray-600 text-white rounded hover:bg-gray-700 w-full"
+                    data-ocid="wf_exec.reset_button"
+                  >
+                    ↺ Reset & Run Again
+                  </button>
+                </div>
+              ) : null}
+            </div>
 
             {/* Property Windows */}
             {showProperties && (
@@ -2519,6 +3506,31 @@ export default function WorkflowDesigner() {
                 {cmpCounts.removed})
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setBottomTab("execlog")}
+              className={cn(
+                "text-xs px-2 border-r border-gray-300 flex-shrink-0 flex items-center gap-1",
+                bottomTab === "execlog"
+                  ? "bg-blue-900 text-white font-semibold"
+                  : "hover:bg-gray-100",
+              )}
+              data-ocid="wf_execlog.tab"
+            >
+              ▶ Execution Log
+              {executionLog.length > 0 && (
+                <span
+                  className={cn(
+                    "text-xs rounded-full w-4 h-4 flex items-center justify-center font-bold",
+                    bottomTab === "execlog"
+                      ? "bg-blue-600 text-white"
+                      : "bg-blue-200 text-blue-800",
+                  )}
+                >
+                  {executionLog.length}
+                </span>
+              )}
+            </button>
           </div>
 
           <div className="flex" style={{ height: "calc(180px - 22px)" }}>
@@ -2853,6 +3865,67 @@ export default function WorkflowDesigner() {
                     </TableBody>
                   </Table>
                 </div>
+              </div>
+            )}
+            {/* Execution Log */}
+            {bottomTab === "execlog" && (
+              <div
+                className="flex flex-col flex-1 overflow-hidden"
+                data-ocid="wf_execlog.panel"
+              >
+                <div className="flex items-center gap-2 px-2 py-0.5 bg-blue-900 text-white flex-shrink-0">
+                  <span className="text-xs font-semibold">Execution Log</span>
+                  <span className="text-xs text-blue-300">
+                    ({executionLog.length} entries)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setExecutionLog([])}
+                    className="ml-auto text-xs text-blue-300 hover:text-white"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <ScrollArea className="flex-1">
+                  {executionLog.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-xs text-gray-400 italic py-4">
+                      No execution log yet. Start the workflow to see activity.
+                    </div>
+                  ) : (
+                    <div className="p-1 space-y-0.5">
+                      {executionLog.map((entry, i) => (
+                        <div
+                          // biome-ignore lint/suspicious/noArrayIndexKey: log entries are append-only
+                          key={i}
+                          className={cn(
+                            "flex items-start gap-1.5 text-xs py-0.5 px-1 rounded",
+                            entry.type === "success" &&
+                              "bg-green-50 text-green-800",
+                            entry.type === "error" && "bg-red-50 text-red-800",
+                            entry.type === "warning" &&
+                              "bg-yellow-50 text-yellow-800",
+                            entry.type === "info" && "bg-blue-50 text-blue-800",
+                          )}
+                          data-ocid={`wf_execlog.item.${i + 1}`}
+                        >
+                          <span
+                            className="text-gray-400 flex-shrink-0 font-mono"
+                            style={{ fontSize: "10px" }}
+                          >
+                            {entry.time}
+                          </span>
+                          <span className="flex-shrink-0">
+                            {entry.type === "success" && "✓"}
+                            {entry.type === "error" && "✗"}
+                            {entry.type === "warning" && "⚠"}
+                            {entry.type === "info" && "ℹ"}
+                          </span>
+                          <span>{entry.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </ScrollArea>
               </div>
             )}
           </div>

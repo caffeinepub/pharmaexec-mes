@@ -58,7 +58,9 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { BatchStatus } from "../backend";
 import type { BatchRecord } from "../backend";
+import { FieldTooltip } from "../components/FieldTooltip";
 import { useAllBatchRecords, useCreateBatchRecord } from "../hooks/useQueries";
+import { PRODUCTS } from "../lib/mesData";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -659,6 +661,7 @@ export default function BatchRecords() {
     erpStart: "",
     notes: "",
   });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   // Enriched orders
   const orders: LocalOrder[] = rawBatches.map(enrichBatch);
@@ -840,6 +843,16 @@ export default function BatchRecords() {
   };
 
   const handleCreateOrder = async () => {
+    const errors: Record<string, string> = {};
+    if (!newForm.productName) errors.productName = "Product name is required";
+    if (!newForm.batchSize) errors.batchSize = "Batch size is required";
+    else if (Number(newForm.batchSize) <= 0)
+      errors.batchSize = "Batch size must be a positive number";
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+    setFormErrors({});
     try {
       await createBatch.mutateAsync({
         productName: newForm.productName,
@@ -1270,29 +1283,53 @@ export default function BatchRecords() {
               <Label>
                 Product Name <span className="text-destructive">*</span>
               </Label>
-              <Input
-                data-ocid="batch_orders.product_name.input"
-                value={newForm.productName}
-                onChange={(e) =>
-                  setNewForm({ ...newForm, productName: e.target.value })
-                }
-                placeholder="e.g. Amoxicillin 500mg Tablets"
-              />
+              <FieldTooltip tip="Select the product name and strength from the list">
+                <Select
+                  value={newForm.productName}
+                  onValueChange={(v) =>
+                    setNewForm({ ...newForm, productName: v })
+                  }
+                >
+                  <SelectTrigger data-ocid="batch_orders.product_name.select">
+                    <SelectValue placeholder="Select product..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PRODUCTS.map((p) => (
+                      <SelectItem key={p} value={p}>
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldTooltip>
+              {!newForm.productName && formErrors.productName && (
+                <p className="text-destructive text-[11px]">
+                  {formErrors.productName}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>
                   Batch Size <span className="text-destructive">*</span>
                 </Label>
-                <Input
-                  data-ocid="batch_orders.batch_size.input"
-                  type="number"
-                  value={newForm.batchSize}
-                  onChange={(e) =>
-                    setNewForm({ ...newForm, batchSize: e.target.value })
-                  }
-                  placeholder="100000"
-                />
+                <FieldTooltip tip="Enter the planned production quantity. Must be a positive number.">
+                  <Input
+                    data-ocid="batch_orders.batch_size.input"
+                    type="number"
+                    min={1}
+                    value={newForm.batchSize}
+                    onChange={(e) =>
+                      setNewForm({ ...newForm, batchSize: e.target.value })
+                    }
+                    placeholder="100000"
+                  />
+                </FieldTooltip>
+                {formErrors.batchSize && (
+                  <p className="text-destructive text-[11px]">
+                    {formErrors.batchSize}
+                  </p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Unit</Label>
@@ -1315,14 +1352,16 @@ export default function BatchRecords() {
             </div>
             <div className="space-y-1.5">
               <Label>Master Recipe</Label>
-              <Input
-                data-ocid="batch_orders.master_recipe.input"
-                value={newForm.masterRecipe}
-                onChange={(e) =>
-                  setNewForm({ ...newForm, masterRecipe: e.target.value })
-                }
-                placeholder="e.g. MR-AMOX-500-001"
-              />
+              <FieldTooltip tip="Enter the master recipe code linked to this batch (e.g. MR-AMOX-500-001)">
+                <Input
+                  data-ocid="batch_orders.master_recipe.input"
+                  value={newForm.masterRecipe}
+                  onChange={(e) =>
+                    setNewForm({ ...newForm, masterRecipe: e.target.value })
+                  }
+                  placeholder="e.g. MR-AMOX-500-001"
+                />
+              </FieldTooltip>
             </div>
             <div className="space-y-1.5">
               <Label>ERP Start Date</Label>
@@ -1337,21 +1376,26 @@ export default function BatchRecords() {
             </div>
             <div className="space-y-1.5">
               <Label>Notes</Label>
-              <Textarea
-                data-ocid="batch_orders.notes.textarea"
-                value={newForm.notes}
-                onChange={(e) =>
-                  setNewForm({ ...newForm, notes: e.target.value })
-                }
-                placeholder="Optional notes"
-                rows={3}
-              />
+              <FieldTooltip tip="Optional: Add any special instructions or observations for this batch">
+                <Textarea
+                  data-ocid="batch_orders.notes.textarea"
+                  value={newForm.notes}
+                  onChange={(e) =>
+                    setNewForm({ ...newForm, notes: e.target.value })
+                  }
+                  placeholder="Optional notes"
+                  rows={3}
+                />
+              </FieldTooltip>
             </div>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setNewOrderOpen(false)}
+              onClick={() => {
+                setNewOrderOpen(false);
+                setFormErrors({});
+              }}
               data-ocid="batch_orders.new.cancel_button"
             >
               Cancel

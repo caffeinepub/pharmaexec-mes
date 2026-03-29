@@ -50,7 +50,7 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
-import { useState } from "react";
+import React, { useState } from "react";
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { helpContent } from "../data/helpContent";
@@ -632,6 +632,32 @@ const EMPTY_NODE: Omit<EquipmentNode, "id" | "createdAt" | "changeHistory"> = {
   historianServer: "",
 };
 
+class DetailErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch() {
+    // error boundary — reset is handled via key prop change
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex items-center justify-center h-full text-sm text-muted-foreground">
+          Select an item to view details
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function FieldRow({
   label,
   children,
@@ -664,7 +690,7 @@ export default function DataManager() {
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
   const [nodes, setNodes] = useState<EquipmentNode[]>(INITIAL_DATA);
-  const [selectedId, setSelectedId] = useState<string | null>("wc1");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<EquipmentNode | null>(null);
@@ -672,17 +698,31 @@ export default function DataManager() {
   const [newNode, setNewNode] = useState<
     Omit<EquipmentNode, "id" | "createdAt" | "changeHistory">
   >({ ...EMPTY_NODE });
+  const [selectedEntityType, setSelectedEntityType] = useState<
+    EntityType | "all"
+  >("all");
+  const [isLoading, setIsLoading] = useState(false);
 
   const filtered = nodes.filter(
     (n) =>
-      search.trim() === "" ||
-      n.shortDescription.toLowerCase().includes(search.toLowerCase()) ||
-      n.identifier.toLowerCase().includes(search.toLowerCase()),
+      (selectedEntityType === "all" || n.entityType === selectedEntityType) &&
+      (search.trim() === "" ||
+        n.shortDescription.toLowerCase().includes(search.toLowerCase()) ||
+        n.identifier.toLowerCase().includes(search.toLowerCase())),
   );
 
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
   const handleSelect = (id: string) => {
+    if (selectedId === id) {
+      if (editMode) {
+        if (!confirm("Discard unsaved changes?")) return;
+      }
+      setSelectedId(null);
+      setEditMode(false);
+      setDraft(null);
+      return;
+    }
     if (editMode) {
       if (!confirm("Discard unsaved changes?")) return;
       setEditMode(false);
@@ -757,7 +797,20 @@ export default function DataManager() {
     toast.success("New item created");
   };
 
-  const currentNode = editMode && draft ? draft : selected;
+  const handleEntityTypeChange = (type: EntityType | "all") => {
+    setSelectedEntityType(type);
+    setSelectedId(null);
+    setEditMode(false);
+    setDraft(null);
+    setIsLoading(true);
+    setTimeout(() => setIsLoading(false), 300);
+  };
+
+  const currentNode = selectedId
+    ? editMode && draft
+      ? draft
+      : selected
+    : null;
 
   const getParentLabel = (parentId: string | null) => {
     if (!parentId) return null;
@@ -772,7 +825,7 @@ export default function DataManager() {
     : "";
 
   return (
-    <div className="flex flex-col h-full -m-6">
+    <div className="flex flex-col flex-1 min-h-0 -m-6">
       {/* Page header */}
       <div className="flex items-center gap-3 px-6 py-4 bg-white border-b border-border shrink-0">
         <Database size={18} className="text-primary" />
@@ -859,7 +912,33 @@ export default function DataManager() {
 
             <div className="flex-1" />
 
-            <div className="relative w-52">
+            <Select
+              value={selectedEntityType}
+              onValueChange={(v) =>
+                handleEntityTypeChange(v as EntityType | "all")
+              }
+            >
+              <SelectTrigger
+                className="h-7 w-44 text-[12px] bg-white"
+                data-ocid="data_manager.entity_type_filter.select"
+              >
+                <SelectValue placeholder="All Types" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-[12px]">
+                  All Types
+                </SelectItem>
+                {(Object.keys(ENTITY_TYPE_LABELS) as EntityType[]).map(
+                  (type) => (
+                    <SelectItem key={type} value={type} className="text-[12px]">
+                      {ENTITY_TYPE_LABELS[type]}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+
+            <div className="relative w-44">
               <Search
                 size={13}
                 className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground"
@@ -874,61 +953,91 @@ export default function DataManager() {
             </div>
           </div>
 
+          {/* Viewing label */}
+          <div className="px-4 pt-3 pb-1 shrink-0">
+            <span className="text-[12px] font-semibold text-foreground">
+              Viewing:{" "}
+              {selectedEntityType === "all"
+                ? "All Types"
+                : ENTITY_TYPE_LABELS[selectedEntityType]}
+            </span>
+            <span className="ml-2 text-[11px] text-muted-foreground">
+              ({filtered.length} item{filtered.length !== 1 ? "s" : ""})
+            </span>
+          </div>
+
           {/* Cards grid */}
-          <ScrollArea className="flex-1">
-            <div className="p-4 grid grid-cols-2 xl:grid-cols-3 gap-3">
-              {filtered.length === 0 && (
-                <div
-                  className="col-span-3 flex flex-col items-center justify-center py-16 text-muted-foreground"
-                  data-ocid="data_manager.empty_state"
-                >
-                  <Database size={32} className="mb-3 opacity-25" />
-                  <p className="text-[13px]">No items match your search</p>
+          <ScrollArea className="flex-1 min-h-0">
+            {isLoading ? (
+              <div
+                className="flex items-center justify-center py-16 text-muted-foreground"
+                data-ocid="data_manager.loading_state"
+              >
+                <div className="flex flex-col items-center gap-2">
+                  <div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                  <span className="text-[12px]">Loading...</span>
                 </div>
-              )}
-              {filtered.map((node, idx) => {
-                const colors = ENTITY_COLORS[node.entityType];
-                const isSelected = selectedId === node.id;
-                return (
-                  <button
-                    key={node.id}
-                    type="button"
-                    onClick={() => handleSelect(node.id)}
-                    data-ocid={`data_manager.item.${idx + 1}`}
-                    className={cn(
-                      "text-left rounded-lg border-l-4 border border-border p-3 cursor-pointer transition-all",
-                      colors.bg,
-                      colors.border,
-                      isSelected
-                        ? "ring-2 ring-primary ring-offset-1 shadow-md"
-                        : "hover:shadow-sm hover:border-border",
-                    )}
+              </div>
+            ) : (
+              <div
+                className="p-4 grid gap-3"
+                style={{
+                  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                }}
+              >
+                {filtered.length === 0 && (
+                  <div
+                    className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground"
+                    data-ocid="data_manager.empty_state"
                   >
-                    <div className="flex items-start justify-between gap-2 mb-1.5">
-                      <span className="text-[12.5px] font-semibold text-foreground leading-tight">
-                        {node.shortDescription}
-                      </span>
-                      <span
-                        className={cn(
-                          "text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0",
-                          colors.badge,
-                        )}
-                      >
-                        {ENTITY_TYPE_LABELS[node.entityType]}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground font-mono">
-                      {node.identifier}
-                    </p>
-                    {node.parentId && (
-                      <p className="text-[10.5px] text-muted-foreground mt-1">
-                        ↳ {getParentLabel(node.parentId)}
+                    <Database size={32} className="mb-3 opacity-25" />
+                    <p className="text-[13px]">No items match your search</p>
+                  </div>
+                )}
+                {filtered.map((node, idx) => {
+                  const colors = ENTITY_COLORS[node.entityType];
+                  const isSelected = selectedId === node.id;
+                  return (
+                    <button
+                      key={node.id}
+                      type="button"
+                      onClick={() => handleSelect(node.id)}
+                      data-ocid={`data_manager.item.${idx + 1}`}
+                      className={cn(
+                        "text-left rounded-lg border-l-4 border border-border p-3 cursor-pointer transition-all",
+                        colors.bg,
+                        colors.border,
+                        isSelected
+                          ? "ring-2 ring-primary ring-offset-1 shadow-md"
+                          : "hover:shadow-sm hover:border-border",
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <span className="text-[12.5px] font-semibold text-foreground leading-tight">
+                          {node.shortDescription}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0",
+                            colors.badge,
+                          )}
+                        >
+                          {ENTITY_TYPE_LABELS[node.entityType]}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        {node.identifier}
                       </p>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+                      {node.parentId && (
+                        <p className="text-[10.5px] text-muted-foreground mt-1">
+                          ↳ {getParentLabel(node.parentId)}
+                        </p>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </ScrollArea>
 
           {/* Status bar */}
@@ -946,7 +1055,7 @@ export default function DataManager() {
         </div>
 
         {/* RIGHT PANE */}
-        <div className="flex flex-col w-[40%] bg-white min-h-0">
+        <div className="flex flex-col w-[40%] bg-white min-h-0 overflow-y-auto">
           {currentNode ? (
             <>
               {/* Detail header */}
@@ -1009,540 +1118,667 @@ export default function DataManager() {
                 </div>
               </div>
 
-              <Tabs
-                defaultValue="basic"
-                className="flex flex-col flex-1 min-h-0"
-              >
-                <div className="overflow-x-auto mx-4 mt-3 shrink-0">
-                  <TabsList className="h-8 bg-muted rounded-md text-[11.5px] w-max min-w-full">
-                    <TabsTrigger
-                      value="basic"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.basic.tab"
-                    >
-                      Basic
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="spec"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.spec.tab"
-                    >
-                      Specification
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="process"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.process.tab"
-                    >
-                      Process
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="engineering"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.engineering.tab"
-                    >
-                      Engineering
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="logbook"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.logbook.tab"
-                    >
-                      Logbook
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="history"
-                      className="h-6 px-3 text-[11.5px]"
-                      data-ocid="data_manager.history.tab"
-                    >
-                      Change History
-                    </TabsTrigger>
-                  </TabsList>
-                </div>
-
-                {/* BASIC TAB */}
-                <TabsContent
-                  value="basic"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3 min-h-0"
+              <DetailErrorBoundary key={selectedId ?? "none"}>
+                <Tabs
+                  defaultValue="basic"
+                  className="flex flex-col flex-1 min-h-0"
                 >
-                  <SectionHeader title="Asset Attributes" />
-                  <FieldRow label="Identifier">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode ? draft!.identifier : currentNode.identifier
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, identifier: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                      data-ocid="data_manager.identifier.input"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Short Description">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.shortDescription
-                          : currentNode.shortDescription
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) =>
-                            d && { ...d, shortDescription: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                      data-ocid="data_manager.short_description.input"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Description">
-                    <Textarea
-                      disabled={!editMode}
-                      value={
-                        editMode ? draft!.description : currentNode.description
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, description: e.target.value },
-                        )
-                      }
-                      className="text-[12px] min-h-[56px] resize-none"
-                      data-ocid="data_manager.description.textarea"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Level">
-                    <Input
-                      disabled={!editMode}
-                      value={editMode ? draft!.level : currentNode.level}
-                      onChange={(e) =>
-                        setDraft((d) => d && { ...d, level: e.target.value })
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Inventory Number">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.inventoryNumber
-                          : currentNode.inventoryNumber
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, inventoryNumber: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Manufacturer">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.manufacturer
-                          : currentNode.manufacturer
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, manufacturer: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="ID">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode ? draft!.externalId : currentNode.externalId
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, externalId: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Serial Number">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.serialNumber
-                          : currentNode.serialNumber
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, serialNumber: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Manufacturing Date">
-                    <Input
-                      type="date"
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.manufacturingDate
-                          : currentNode.manufacturingDate
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) =>
-                            d && { ...d, manufacturingDate: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Disposed">
-                    <div className="flex items-center h-7">
-                      <Checkbox
+                  <div className="overflow-x-auto mx-4 mt-3 shrink-0">
+                    <TabsList className="h-8 bg-muted rounded-md text-[11.5px] w-max min-w-full">
+                      <TabsTrigger
+                        value="basic"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.basic.tab"
+                      >
+                        Basic
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="spec"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.spec.tab"
+                      >
+                        Specification
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="process"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.process.tab"
+                      >
+                        Process
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="engineering"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.engineering.tab"
+                      >
+                        Engineering
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="logbook"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.logbook.tab"
+                      >
+                        Logbook
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="history"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.history.tab"
+                      >
+                        Change History
+                      </TabsTrigger>
+                    </TabsList>
+                  </div>
+
+                  {/* BASIC TAB */}
+                  <TabsContent
+                    value="basic"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 min-h-0"
+                  >
+                    <SectionHeader title="Asset Attributes" />
+                    <FieldRow label="Identifier">
+                      <Input
                         disabled={!editMode}
-                        checked={
-                          editMode ? draft!.disposed : currentNode.disposed
-                        }
-                        onCheckedChange={(v) =>
-                          setDraft((d) => d && { ...d, disposed: Boolean(v) })
-                        }
-                        data-ocid="data_manager.disposed.checkbox"
-                      />
-                    </div>
-                  </FieldRow>
-                  <FieldRow label="Barcode">
-                    <Input
-                      disabled={!editMode}
-                      value={editMode ? draft!.barcode : currentNode.barcode}
-                      onChange={(e) =>
-                        setDraft((d) => d && { ...d, barcode: e.target.value })
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Barcode Enabled">
-                    <div className="flex items-center h-7">
-                      <Checkbox
-                        disabled={!editMode}
-                        checked={
+                        value={
                           editMode
-                            ? draft!.barcodeEnabled
-                            : currentNode.barcodeEnabled
+                            ? (draft?.identifier ?? currentNode.identifier)
+                            : currentNode.identifier
                         }
-                        onCheckedChange={(v) =>
+                        onChange={(e) =>
                           setDraft(
-                            (d) => d && { ...d, barcodeEnabled: Boolean(v) },
+                            (d) => d && { ...d, identifier: e.target.value },
                           )
                         }
-                        data-ocid="data_manager.barcode_enabled.checkbox"
+                        className="h-7 text-[12px]"
+                        data-ocid="data_manager.identifier.input"
                       />
+                    </FieldRow>
+                    <FieldRow label="Short Description">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.shortDescription
+                            : currentNode.shortDescription
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && { ...d, shortDescription: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                        data-ocid="data_manager.short_description.input"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Description">
+                      <Textarea
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? (draft?.description ?? currentNode.description)
+                            : currentNode.description
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, description: e.target.value },
+                          )
+                        }
+                        className="text-[12px] min-h-[56px] resize-none"
+                        data-ocid="data_manager.description.textarea"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Level">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? (draft?.level ?? currentNode.level)
+                            : currentNode.level
+                        }
+                        onChange={(e) =>
+                          setDraft((d) => d && { ...d, level: e.target.value })
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Inventory Number">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.inventoryNumber
+                            : currentNode.inventoryNumber
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && { ...d, inventoryNumber: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Manufacturer">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.manufacturer
+                            : currentNode.manufacturer
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, manufacturer: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="ID">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? (draft?.externalId ?? currentNode.externalId)
+                            : currentNode.externalId
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, externalId: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Serial Number">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.serialNumber
+                            : currentNode.serialNumber
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, serialNumber: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Manufacturing Date">
+                      <Input
+                        type="date"
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.manufacturingDate
+                            : currentNode.manufacturingDate
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && { ...d, manufacturingDate: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Disposed">
+                      <div className="flex items-center h-7">
+                        <Checkbox
+                          disabled={!editMode}
+                          checked={
+                            editMode
+                              ? (draft?.disposed ?? currentNode.disposed)
+                              : currentNode.disposed
+                          }
+                          onCheckedChange={(v) =>
+                            setDraft((d) => d && { ...d, disposed: Boolean(v) })
+                          }
+                          data-ocid="data_manager.disposed.checkbox"
+                        />
+                      </div>
+                    </FieldRow>
+                    <FieldRow label="Barcode">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? (draft?.barcode ?? currentNode.barcode)
+                            : currentNode.barcode
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, barcode: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Barcode Enabled">
+                      <div className="flex items-center h-7">
+                        <Checkbox
+                          disabled={!editMode}
+                          checked={
+                            editMode
+                              ? draft?.barcodeEnabled
+                              : currentNode.barcodeEnabled
+                          }
+                          onCheckedChange={(v) =>
+                            setDraft(
+                              (d) => d && { ...d, barcodeEnabled: Boolean(v) },
+                            )
+                          }
+                          data-ocid="data_manager.barcode_enabled.checkbox"
+                        />
+                      </div>
+                    </FieldRow>
+
+                    <SectionHeader title="Automation Attributes" />
+                    <FieldRow label="Server name default">
+                      <Input
+                        readOnly
+                        value={currentNode.automationServerNameDefault}
+                        className="h-7 text-[12px] bg-muted/50"
+                        placeholder="AutomationIntegrationServer1"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Server name">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.automationServerName
+                            : currentNode.automationServerName
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && {
+                                ...d,
+                                automationServerName: e.target.value,
+                              },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Data OPS path">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? (draft?.dataOpsPath ?? currentNode.dataOpsPath)
+                            : currentNode.dataOpsPath
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) => d && { ...d, dataOpsPath: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px] font-mono"
+                      />
+                    </FieldRow>
+
+                    <SectionHeader title="Historian Attributes" />
+                    <FieldRow label="Provider default">
+                      <Input
+                        readOnly
+                        value={currentNode.historianProvider}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Access server default">
+                      <Input
+                        readOnly
+                        value={currentNode.historianAccessServerDefault}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Access server">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.historianAccessServer
+                            : currentNode.historianAccessServer
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && {
+                                ...d,
+                                historianAccessServer: e.target.value,
+                              },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Historian server default">
+                      <Input
+                        readOnly
+                        value={currentNode.historianServerDefault}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Historian server">
+                      <Input
+                        disabled={!editMode}
+                        value={
+                          editMode
+                            ? draft?.historianServer
+                            : currentNode.historianServer
+                        }
+                        onChange={(e) =>
+                          setDraft(
+                            (d) =>
+                              d && { ...d, historianServer: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                      />
+                    </FieldRow>
+                  </TabsContent>
+
+                  {/* SPECIFICATION TAB */}
+                  <TabsContent
+                    value="spec"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                  >
+                    <SectionHeader title="Specification" />
+                    <FieldRow label="Equipment Class">
+                      <Input
+                        readOnly
+                        value={ENTITY_TYPE_LABELS[currentNode.entityType]}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Level">
+                      <Input
+                        readOnly
+                        value={currentNode.level}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Status">
+                      <Input
+                        readOnly
+                        value={currentNode.disposed ? "Disposed" : "Active"}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Manufacturer">
+                      <Input
+                        readOnly
+                        value={currentNode.manufacturer || "—"}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                  </TabsContent>
+
+                  {/* PROCESS TAB */}
+                  <TabsContent
+                    value="process"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                  >
+                    <SectionHeader title="Process Configuration" />
+                    <div className="mb-3 text-[11.5px] text-muted-foreground">
+                      Process parameters and operating conditions for this
+                      entity.
                     </div>
-                  </FieldRow>
-
-                  <SectionHeader title="Automation Attributes" />
-                  <FieldRow label="Server name default">
-                    <Input
-                      readOnly
-                      value={currentNode.automationServerNameDefault}
-                      className="h-7 text-[12px] bg-muted/50"
-                      placeholder="AutomationIntegrationServer1"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Server name">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.automationServerName
-                          : currentNode.automationServerName
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) =>
-                            d && { ...d, automationServerName: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Data OPS path">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode ? draft!.dataOpsPath : currentNode.dataOpsPath
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, dataOpsPath: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px] font-mono"
-                    />
-                  </FieldRow>
-
-                  <SectionHeader title="Historian Attributes" />
-                  <FieldRow label="Provider default">
-                    <Input
-                      readOnly
-                      value={currentNode.historianProvider}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Access server default">
-                    <Input
-                      readOnly
-                      value={currentNode.historianAccessServerDefault}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Access server">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.historianAccessServer
-                          : currentNode.historianAccessServer
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) =>
-                            d && {
-                              ...d,
-                              historianAccessServer: e.target.value,
-                            },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Historian server default">
-                    <Input
-                      readOnly
-                      value={currentNode.historianServerDefault}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Historian server">
-                    <Input
-                      disabled={!editMode}
-                      value={
-                        editMode
-                          ? draft!.historianServer
-                          : currentNode.historianServer
-                      }
-                      onChange={(e) =>
-                        setDraft(
-                          (d) => d && { ...d, historianServer: e.target.value },
-                        )
-                      }
-                      className="h-7 text-[12px]"
-                    />
-                  </FieldRow>
-                </TabsContent>
-
-                {/* SPECIFICATION TAB */}
-                <TabsContent
-                  value="spec"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3"
-                >
-                  <SectionHeader title="Specification" />
-                  <FieldRow label="Equipment Class">
-                    <Input
-                      readOnly
-                      value={ENTITY_TYPE_LABELS[currentNode.entityType]}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Level">
-                    <Input
-                      readOnly
-                      value={currentNode.level}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Status">
-                    <Input
-                      readOnly
-                      value={currentNode.disposed ? "Disposed" : "Active"}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Manufacturer">
-                    <Input
-                      readOnly
-                      value={currentNode.manufacturer || "—"}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                </TabsContent>
-
-                {/* PROCESS TAB */}
-                <TabsContent
-                  value="process"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3"
-                >
-                  <SectionHeader title="Process Configuration" />
-                  <div className="text-[12px] text-muted-foreground bg-muted/30 rounded-lg p-4">
-                    No process configuration defined for this entity. Configure
-                    process parameters in the Process Designer.
-                  </div>
-                </TabsContent>
-
-                {/* ENGINEERING TAB */}
-                <TabsContent
-                  value="engineering"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3"
-                >
-                  <SectionHeader title="Engineering Data" />
-                  <FieldRow label="Data OPS path">
-                    <Input
-                      readOnly
-                      value={currentNode.dataOpsPath || "—"}
-                      className="h-7 text-[12px] font-mono bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Automation server">
-                    <Input
-                      readOnly
-                      value={
-                        currentNode.automationServerName ||
-                        currentNode.automationServerNameDefault
-                      }
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Historian server">
-                    <Input
-                      readOnly
-                      value={
-                        currentNode.historianServer ||
-                        currentNode.historianServerDefault
-                      }
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Serial Number">
-                    <Input
-                      readOnly
-                      value={currentNode.serialNumber || "—"}
-                      className="h-7 text-[12px] bg-muted/50"
-                    />
-                  </FieldRow>
-                </TabsContent>
-
-                {/* LOGBOOK TAB */}
-                <TabsContent
-                  value="logbook"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3"
-                >
-                  <SectionHeader title="Logbook Entries" />
-                  {currentNode.changeHistory.length === 0 ? (
-                    <div
-                      className="text-[12px] text-muted-foreground py-6 text-center"
-                      data-ocid="data_manager.logbook.empty_state"
-                    >
-                      No logbook entries recorded.
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {[...currentNode.changeHistory].reverse().map((entry) => (
-                        <div
-                          key={entry.timestamp + entry.field}
-                          className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border"
-                        >
-                          <Clock
-                            size={13}
-                            className="text-muted-foreground mt-0.5 shrink-0"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[11.5px] font-medium text-foreground">
-                              <span className="font-semibold">
-                                {entry.field}
-                              </span>{" "}
-                              changed by {entry.changedBy}
-                            </p>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                              {new Date(entry.timestamp).toLocaleString()}
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </TabsContent>
-
-                {/* CHANGE HISTORY TAB */}
-                <TabsContent
-                  value="history"
-                  className="flex-1 overflow-auto px-5 pb-5 mt-3"
-                >
-                  <SectionHeader title="Change History" />
-                  {currentNode.changeHistory.length === 0 ? (
-                    <div
-                      className="text-[12px] text-muted-foreground py-6 text-center"
-                      data-ocid="data_manager.history.empty_state"
-                    >
-                      No changes recorded.
-                    </div>
-                  ) : (
                     <Table>
                       <TableHeader>
                         <TableRow>
                           <TableHead className="text-[11px] h-7">
-                            Timestamp
+                            Parameter
                           </TableHead>
                           <TableHead className="text-[11px] h-7">
-                            Field
+                            Value
                           </TableHead>
                           <TableHead className="text-[11px] h-7">
-                            Old Value
+                            Unit
                           </TableHead>
+                          <TableHead className="text-[11px] h-7">Min</TableHead>
+                          <TableHead className="text-[11px] h-7">Max</TableHead>
                           <TableHead className="text-[11px] h-7">
-                            New Value
-                          </TableHead>
-                          <TableHead className="text-[11px] h-7">
-                            Changed By
+                            Type
                           </TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {[...currentNode.changeHistory]
-                          .reverse()
-                          .map((entry, idx) => (
-                            <TableRow
-                              key={entry.timestamp + entry.field}
-                              data-ocid={`data_manager.history.item.${idx + 1}`}
-                            >
-                              <TableCell className="text-[11px] py-1.5 font-mono">
-                                {new Date(entry.timestamp).toLocaleString()}
-                              </TableCell>
-                              <TableCell className="text-[11px] py-1.5 font-medium">
-                                {entry.field}
-                              </TableCell>
-                              <TableCell className="text-[11px] py-1.5 text-destructive">
-                                {entry.oldValue || "—"}
-                              </TableCell>
-                              <TableCell className="text-[11px] py-1.5 text-green-600">
-                                {entry.newValue || "—"}
-                              </TableCell>
-                              <TableCell className="text-[11px] py-1.5">
-                                {entry.changedBy}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                        {[
+                          {
+                            param: "Operating Temperature",
+                            value: "25",
+                            unit: "°C",
+                            min: "15",
+                            max: "30",
+                            type: "Process",
+                          },
+                          {
+                            param: "Relative Humidity",
+                            value: "45",
+                            unit: "%",
+                            min: "30",
+                            max: "60",
+                            type: "Process",
+                          },
+                          {
+                            param: "Pressure",
+                            value: "1.0",
+                            unit: "bar",
+                            min: "0.8",
+                            max: "1.2",
+                            type: "Process",
+                          },
+                          {
+                            param: "Calibration Interval",
+                            value: "365",
+                            unit: "days",
+                            min: "—",
+                            max: "—",
+                            type: "Maintenance",
+                          },
+                          {
+                            param: "Max Load Capacity",
+                            value: "See Spec Sheet",
+                            unit: "—",
+                            min: "—",
+                            max: "—",
+                            type: "Specification",
+                          },
+                          {
+                            param: "Cleaning Status",
+                            value: "Not Set",
+                            unit: "—",
+                            min: "—",
+                            max: "—",
+                            type: "Compliance",
+                          },
+                        ].map((row, idx) => (
+                          <TableRow
+                            key={row.param}
+                            data-ocid={`data_manager.process.item.${idx + 1}`}
+                          >
+                            <TableCell className="text-[11px] py-1.5 font-medium">
+                              {row.param}
+                            </TableCell>
+                            <TableCell className="text-[11px] py-1.5 font-mono">
+                              {row.value}
+                            </TableCell>
+                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
+                              {row.unit}
+                            </TableCell>
+                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
+                              {row.min}
+                            </TableCell>
+                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
+                              {row.max}
+                            </TableCell>
+                            <TableCell className="text-[11px] py-1.5">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                                {row.type}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
                       </TableBody>
                     </Table>
-                  )}
-                </TabsContent>
-              </Tabs>
+                  </TabsContent>
+
+                  {/* ENGINEERING TAB */}
+                  <TabsContent
+                    value="engineering"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                  >
+                    <SectionHeader title="Engineering Data" />
+                    <FieldRow label="Data OPS path">
+                      <Input
+                        readOnly
+                        value={currentNode.dataOpsPath || "—"}
+                        className="h-7 text-[12px] font-mono bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Automation server">
+                      <Input
+                        readOnly
+                        value={
+                          currentNode.automationServerName ||
+                          currentNode.automationServerNameDefault
+                        }
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Historian server">
+                      <Input
+                        readOnly
+                        value={
+                          currentNode.historianServer ||
+                          currentNode.historianServerDefault
+                        }
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Serial Number">
+                      <Input
+                        readOnly
+                        value={currentNode.serialNumber || "—"}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                  </TabsContent>
+
+                  {/* LOGBOOK TAB */}
+                  <TabsContent
+                    value="logbook"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                  >
+                    <SectionHeader title="Logbook Entries" />
+                    {currentNode.changeHistory.length === 0 ? (
+                      <div
+                        className="text-[12px] text-muted-foreground py-6 text-center"
+                        data-ocid="data_manager.logbook.empty_state"
+                      >
+                        No logbook entries recorded.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {[...currentNode.changeHistory]
+                          .reverse()
+                          .map((entry) => (
+                            <div
+                              key={entry.timestamp + entry.field}
+                              className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border"
+                            >
+                              <Clock
+                                size={13}
+                                className="text-muted-foreground mt-0.5 shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11.5px] font-medium text-foreground">
+                                  <span className="font-semibold">
+                                    {entry.field}
+                                  </span>{" "}
+                                  changed by {entry.changedBy}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground mt-0.5">
+                                  {new Date(entry.timestamp).toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  {/* CHANGE HISTORY TAB */}
+                  <TabsContent
+                    value="history"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3"
+                  >
+                    <SectionHeader title="Change History" />
+                    {currentNode.changeHistory.length === 0 ? (
+                      <div
+                        className="text-[12px] text-muted-foreground py-6 text-center"
+                        data-ocid="data_manager.history.empty_state"
+                      >
+                        No changes recorded.
+                      </div>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-[11px] h-7">
+                              Timestamp
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Field
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Old Value
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              New Value
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Changed By
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {[...currentNode.changeHistory]
+                            .reverse()
+                            .map((entry, idx) => (
+                              <TableRow
+                                key={entry.timestamp + entry.field}
+                                data-ocid={`data_manager.history.item.${idx + 1}`}
+                              >
+                                <TableCell className="text-[11px] py-1.5 font-mono">
+                                  {new Date(entry.timestamp).toLocaleString()}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5 font-medium">
+                                  {entry.field}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5 text-destructive">
+                                  {entry.oldValue || "—"}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5 text-green-600">
+                                  {entry.newValue || "—"}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5">
+                                  {entry.changedBy}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </TabsContent>
+                </Tabs>
+              </DetailErrorBoundary>
             </>
           ) : (
             <div
@@ -1594,9 +1830,12 @@ export default function DataManager() {
               <div className="space-y-1">
                 <Label className="text-[11.5px]">Parent</Label>
                 <Select
-                  value={newNode.parentId ?? ""}
+                  value={newNode.parentId ?? "none"}
                   onValueChange={(v) =>
-                    setNewNode((n) => ({ ...n, parentId: v || null }))
+                    setNewNode((n) => ({
+                      ...n,
+                      parentId: v === "none" ? null : v,
+                    }))
                   }
                 >
                   <SelectTrigger
@@ -1606,7 +1845,7 @@ export default function DataManager() {
                     <SelectValue placeholder="None" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="" className="text-[12px]">
+                    <SelectItem value="none" className="text-[12px]">
                       None
                     </SelectItem>
                     {nodes.map((n) => (

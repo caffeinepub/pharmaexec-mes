@@ -21,6 +21,7 @@ import { HelpCircle, Loader2, Plus } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { FieldTooltip } from "../components/FieldTooltip";
 import { HelpPanel } from "../components/HelpPanel";
 import { PriorityBadge, WorkOrderStatusBadge } from "../components/StatusBadge";
 import { helpContent } from "../data/helpContent";
@@ -37,8 +38,19 @@ export default function WorkOrders() {
     priority: "Medium",
     scheduledStart: "",
   });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
   const handleSubmit = async () => {
+    const errors: Record<string, string> = {};
+    if (!form.description.trim())
+      errors.description = "Description is required";
+    if (!form.scheduledStart)
+      errors.scheduledStart = "Scheduled start date is required";
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
+      return;
+    }
+    setFormErrors({});
     try {
       await createWO.mutateAsync({
         description: form.description,
@@ -50,6 +62,7 @@ export default function WorkOrders() {
       });
       toast.success("Work order created");
       setModalOpen(false);
+      setFormErrors({});
       setForm({
         description: "",
         batchRecordId: "",
@@ -192,63 +205,90 @@ export default function WorkOrders() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label>Description</Label>
-              <Textarea
-                data-ocid="work_orders.description.textarea"
-                value={form.description}
-                onChange={(e) =>
-                  setForm({ ...form, description: e.target.value })
-                }
-                placeholder="Describe the work to be done"
-                rows={3}
-              />
+              <Label>
+                Description <span className="text-destructive">*</span>
+              </Label>
+              <FieldTooltip tip="Describe the work to be performed — include the operation type, purpose, and any special requirements">
+                <Textarea
+                  data-ocid="work_orders.description.textarea"
+                  value={form.description}
+                  onChange={(e) => {
+                    setForm({ ...form, description: e.target.value });
+                    setFormErrors((p) => ({ ...p, description: "" }));
+                  }}
+                  placeholder="Describe the work to be done"
+                  rows={3}
+                />
+              </FieldTooltip>
+              {formErrors.description && (
+                <p className="text-destructive text-[11px]">
+                  {formErrors.description}
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Batch Record ID</Label>
-                <Input
-                  data-ocid="work_orders.batch_id.input"
-                  value={form.batchRecordId}
-                  onChange={(e) =>
-                    setForm({ ...form, batchRecordId: e.target.value })
-                  }
-                  placeholder="B-2026-001"
-                />
+                <FieldTooltip tip="Enter the batch record this work order is associated with (e.g. B-2026-001)">
+                  <Input
+                    data-ocid="work_orders.batch_id.input"
+                    value={form.batchRecordId}
+                    onChange={(e) =>
+                      setForm({ ...form, batchRecordId: e.target.value })
+                    }
+                    placeholder="B-2026-001"
+                  />
+                </FieldTooltip>
               </div>
               <div className="space-y-1.5">
                 <Label>Priority</Label>
-                <Select
-                  value={form.priority}
-                  onValueChange={(v) => setForm({ ...form, priority: v })}
-                >
-                  <SelectTrigger data-ocid="work_orders.priority.select">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Critical">Critical</SelectItem>
-                    <SelectItem value="High">High</SelectItem>
-                    <SelectItem value="Medium">Medium</SelectItem>
-                    <SelectItem value="Low">Low</SelectItem>
-                  </SelectContent>
-                </Select>
+                <FieldTooltip tip="Select priority: Critical = must start immediately, High = within today, Medium = within this week, Low = when resources available">
+                  <Select
+                    value={form.priority}
+                    onValueChange={(v) => setForm({ ...form, priority: v })}
+                  >
+                    <SelectTrigger data-ocid="work_orders.priority.select">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Critical">Critical</SelectItem>
+                      <SelectItem value="High">High</SelectItem>
+                      <SelectItem value="Medium">Medium</SelectItem>
+                      <SelectItem value="Low">Low</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FieldTooltip>
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Scheduled Start</Label>
-              <Input
-                data-ocid="work_orders.scheduled_start.input"
-                type="datetime-local"
-                value={form.scheduledStart}
-                onChange={(e) =>
-                  setForm({ ...form, scheduledStart: e.target.value })
-                }
-              />
+              <Label>
+                Scheduled Start <span className="text-destructive">*</span>
+              </Label>
+              <FieldTooltip tip="Select the planned start date and time for this work order">
+                <Input
+                  data-ocid="work_orders.scheduled_start.input"
+                  type="datetime-local"
+                  value={form.scheduledStart}
+                  onChange={(e) => {
+                    setForm({ ...form, scheduledStart: e.target.value });
+                    setFormErrors((p) => ({ ...p, scheduledStart: "" }));
+                  }}
+                />
+              </FieldTooltip>
+              {formErrors.scheduledStart && (
+                <p className="text-destructive text-[11px]">
+                  {formErrors.scheduledStart}
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setModalOpen(false)}
+              onClick={() => {
+                setModalOpen(false);
+                setFormErrors({});
+              }}
               data-ocid="work_orders.new.cancel_button"
             >
               Cancel
