@@ -41,6 +41,7 @@ import {
   Clock,
   Database,
   Edit2,
+  FileDown,
   GitBranch,
   HelpCircle,
   History,
@@ -52,6 +53,7 @@ import {
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
+import { ReportDialog } from "../components/ReportDialog";
 import { helpContent } from "../data/helpContent";
 
 type EntityType =
@@ -67,6 +69,8 @@ interface ChangeEntry {
   oldValue: string;
   newValue: string;
   changedBy: string;
+  action?: "Create" | "Update" | "Delete";
+  reason?: string;
 }
 
 interface EquipmentNode {
@@ -688,6 +692,7 @@ function SectionHeader({ title }: { title: string }) {
 export default function DataManager() {
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const [nodes, setNodes] = useState<EquipmentNode[]>(INITIAL_DATA);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -923,6 +928,17 @@ export default function DataManager() {
             >
               <Trash2 size={13} />
               Delete
+            </Button>
+
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 text-[12px] px-3"
+              onClick={() => setReportOpen(true)}
+              data-ocid="data_manager.export_report_button"
+            >
+              <FileDown size={13} />
+              Export Report
             </Button>
 
             <div className="flex-1" />
@@ -1964,6 +1980,11 @@ export default function DataManager() {
 
       {/* Footer */}
 
+      <ReportDialog
+        open={reportOpen}
+        onOpenChange={setReportOpen}
+        nodes={nodes}
+      />
       <HelpPanel
         title={helpContent.dataManager.title}
         open={helpOpen}

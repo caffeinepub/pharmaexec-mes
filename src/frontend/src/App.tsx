@@ -5,7 +5,6 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  redirect,
 } from "@tanstack/react-router";
 import AppShell from "./components/AppShell";
 import AuditTrail from "./pages/AuditTrail";
@@ -16,6 +15,7 @@ import Deviations from "./pages/Deviations";
 import EquipmentPage from "./pages/Equipment";
 import Materials from "./pages/Materials";
 import Personnel from "./pages/Personnel";
+import ProductionPlanning from "./pages/ProductionPlanning";
 import RecipeDesigner from "./pages/RecipeDesigner";
 import Settings from "./pages/Settings";
 import WorkOrders from "./pages/WorkOrders";
@@ -46,6 +46,12 @@ const workOrdersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/work-orders",
   component: WorkOrders,
+});
+
+const productionPlanningRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/production-planning",
+  component: ProductionPlanning,
 });
 
 const equipmentRoute = createRoute({
@@ -106,6 +112,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   batchRecordsRoute,
   workOrdersRoute,
+  productionPlanningRoute,
   equipmentRoute,
   materialsRoute,
   deviationsRoute,
