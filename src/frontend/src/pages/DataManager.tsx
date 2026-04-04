@@ -4,6 +4,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -34,6 +35,12 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   AlertTriangle,
@@ -46,6 +53,7 @@ import {
   HelpCircle,
   History,
   Plus,
+  RotateCcw,
   Save,
   Search,
   Shield,
@@ -301,6 +309,7 @@ export default function DataManager() {
 
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveConfirmReason, setSaveConfirmReason] = useState("");
+  const [makeDraftConfirmOpen, setMakeDraftConfirmOpen] = useState(false);
 
   const handleSave = () => {
     if (!draft) return;
@@ -403,6 +412,40 @@ export default function DataManager() {
       });
     });
     toast.success("Record approved. Previous version marked as Superseded.");
+  };
+
+  const handleMakeDraft = () => {
+    if (!selected) return;
+    setMakeDraftConfirmOpen(true);
+  };
+
+  const handleConfirmMakeDraft = () => {
+    if (!selected) return;
+    const now = new Date().toISOString();
+    setNodes((prev) =>
+      prev.map((n) =>
+        n.id === selected.id
+          ? {
+              ...n,
+              status: "Draft" as GmpStatus,
+              changeHistory: [
+                ...n.changeHistory,
+                {
+                  timestamp: now,
+                  field: "status",
+                  oldValue: "Approved",
+                  newValue: "Draft",
+                  changedBy: "Dr. Sarah Chen",
+                  action: "Update" as const,
+                  reason: "Converted to Draft for modification",
+                },
+              ],
+            }
+          : n,
+      ),
+    );
+    setMakeDraftConfirmOpen(false);
+    toast.success("Record converted to Draft. You can now edit.");
   };
 
   const handleDelete = () => {
@@ -548,28 +591,44 @@ export default function DataManager() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 gap-1 text-[12px] px-3"
-              onClick={editMode ? handleSave : handleEdit}
-              disabled={
-                !selected ||
-                selected?.status === "Superseded" ||
-                (!editMode && selected?.status === "Approved")
-              }
-              data-ocid="data_manager.save_button"
-            >
-              {editMode ? (
-                <>
-                  <Save size={13} /> Save
-                </>
-              ) : (
-                <>
-                  <Edit2 size={13} /> Edit
-                </>
-              )}
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 text-[12px] px-3"
+                      onClick={editMode ? handleSave : handleEdit}
+                      disabled={
+                        !selected ||
+                        selected?.status === "Superseded" ||
+                        (!editMode && selected?.status === "Approved")
+                      }
+                      data-ocid="data_manager.save_button"
+                    >
+                      {editMode ? (
+                        <>
+                          <Save size={13} /> Save
+                        </>
+                      ) : (
+                        <>
+                          <Edit2 size={13} /> Edit
+                        </>
+                      )}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {!editMode && selected?.status === "Approved" && (
+                  <TooltipContent>
+                    <p>
+                      Approved records are read-only. Click &apos;Make
+                      Draft&apos; to edit.
+                    </p>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
 
             <Button
               size="sm"
@@ -891,17 +950,43 @@ export default function DataManager() {
                     </>
                   ) : (
                     <>
-                      {(currentNode.status === "Draft" ||
-                        !currentNode.status) && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 text-[12px] px-3"
-                          onClick={handleEdit}
-                          data-ocid="data_manager.edit_button"
-                        >
-                          <Edit2 size={12} /> Edit
-                        </Button>
+                      {currentNode.status === "Approved" ? (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 gap-1 text-[12px] px-3"
+                                  disabled
+                                  data-ocid="data_manager.edit_button"
+                                >
+                                  <Edit2 size={12} /> Edit
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>
+                                Approved records are read-only. Click &apos;Make
+                                Draft&apos; to edit.
+                              </p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      ) : (
+                        (currentNode.status === "Draft" ||
+                          !currentNode.status) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 gap-1 text-[12px] px-3"
+                            onClick={handleEdit}
+                            data-ocid="data_manager.edit_button"
+                          >
+                            <Edit2 size={12} /> Edit
+                          </Button>
+                        )
                       )}
                       {(currentNode.status === "Draft" ||
                         !currentNode.status) && (
@@ -913,6 +998,17 @@ export default function DataManager() {
                           data-ocid="data_manager.approve_button"
                         >
                           <Shield size={12} /> Approve
+                        </Button>
+                      )}
+                      {currentNode.status === "Approved" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-amber-700 border-amber-300 hover:bg-amber-50"
+                          onClick={handleMakeDraft}
+                          data-ocid="data_manager.make_draft_button"
+                        >
+                          <RotateCcw size={12} /> Make Draft
                         </Button>
                       )}
                       {isEquipmentNode(currentNode) && (
@@ -2533,6 +2629,40 @@ export default function DataManager() {
           <DialogFooter>
             <Button size="sm" onClick={() => setValidateDialogOpen(false)}>
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Make Draft Confirmation Dialog */}
+      <Dialog
+        open={makeDraftConfirmOpen}
+        onOpenChange={setMakeDraftConfirmOpen}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-base">Convert to Draft?</DialogTitle>
+            <DialogDescription className="text-sm">
+              Are you sure you want to convert this Approved record to Draft?
+              This action will be logged in Change History.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMakeDraftConfirmOpen(false)}
+              data-ocid="data_manager.make_draft_dialog.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={handleConfirmMakeDraft}
+              data-ocid="data_manager.make_draft_dialog.confirm_button"
+            >
+              <RotateCcw size={13} className="mr-1" /> Convert to Draft
             </Button>
           </DialogFooter>
         </DialogContent>
