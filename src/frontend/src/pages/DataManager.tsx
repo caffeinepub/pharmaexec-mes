@@ -553,7 +553,11 @@ export default function DataManager() {
               variant="outline"
               className="h-7 gap-1 text-[12px] px-3"
               onClick={editMode ? handleSave : handleEdit}
-              disabled={!selected || selected?.status === "Superseded"}
+              disabled={
+                !selected ||
+                selected?.status === "Superseded" ||
+                (!editMode && selected?.status === "Approved")
+              }
               data-ocid="data_manager.save_button"
             >
               {editMode ? (
@@ -887,7 +891,8 @@ export default function DataManager() {
                     </>
                   ) : (
                     <>
-                      {currentNode.status !== "Superseded" && (
+                      {(currentNode.status === "Draft" ||
+                        !currentNode.status) && (
                         <Button
                           size="sm"
                           variant="outline"
