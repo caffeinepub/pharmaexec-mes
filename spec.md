@@ -1,57 +1,57 @@
-# PharmaExec MES — Change Control Revision Workflow
+# PharmaExec MES — Data Manager Simplification
 
 ## Current State
 
-- `DataManager.tsx` manages `EquipmentNode[]` in local state, initialized from `INITIAL_DATA` in `equipmentNodes.ts`.
-- Each node has `status: 'Draft' | 'Approved'` and `changeHistory: ChangeEntry[]`.
-- `EquipmentNode.changeHistory` tracks field-level diffs with `timestamp`, `field`, `oldValue`, `newValue`, `changedBy`, and optional `reason`.
-- When `status === 'Approved'`, the Edit button is disabled and a lock icon is shown; direct editing is blocked.
-- An "Approve" button transitions a Draft record to Approved.
-- No revision/duplication workflow exists. No concept of `superseded` status or version lineage.
+DataManager.tsx (~2761 lines) implements a version control workflow for Approved records:
+- Approved records are **read-only**; editing is blocked with a toast error
+- A "Revise" button (replaces Edit for Approved records) creates a **duplicate Draft copy** of the record with incremented `versionNumber`, `originalId`, and `changeControlReason`
+- Approving a revision marks all prior versions as `"Superseded"` status
+- A **"Versions" tab** shows the full revision chain with "View" navigation buttons
+- A "Revise" dialog prompts for a mandatory reason before creating the duplicate
+- The detail header shows a "Workflow" button navigating to `/workflow-designer`
+- States: `reviseDialogOpen`, `reviseReason`
+- Handlers: `handleRevise`, `handleConfirmRevise`
+- EquipmentNode has optional fields: `versionNumber`, `originalId`, `revisedById`, `changeControlReason`
+- GmpStatus includes `"Superseded"` value
+- Change History tab already exists and shows field-level changes with timestamp/changedBy/reason
 
 ## Requested Changes (Diff)
 
 ### Add
-
-- **`Superseded` status** to `GmpStatus` type in `gmpValidation.ts`.
-- **`versionNumber` field** on `EquipmentNode` (number, default 1).
-- **`originalId` field** on `EquipmentNode` (string | null) — points to the record this was revised from.
-- **`revisedById` field** on `EquipmentNode` (string | null) — reverse pointer: which record superseded this one.
-- **`changeControlReason` field** on `EquipmentNode` (string) — reason captured at revision time.
-- **"Revise" button** in the detail header (replaces Edit when status === 'Approved').
-- **Revision dialog** — prompts user for "Reason for Change" before creating the draft duplicate.
-- **Revision creation logic** — duplicates the Approved record with a new id, status='Draft', versionNumber incremented, originalId set, preserves all fields.
-- **Approval logic update** — when approving a revised record (originalId set), automatically set the original record's status to 'Superseded'.
-- **"Version History" tab** in the right-panel tabs — shows all versions of the record (original + revisions), with version number, status badge, timestamp, and a "View" button to navigate to that version.
-- **Superseded status styling** — gray badge with strikethrough for superseded records in cards and header.
-- **Superseded card indicator** — grayed-out style on cards for superseded records.
+- Save confirmation dialog: before applying edits, show "Are you sure you want to modify this record?" — user can cancel or proceed
+- Enhanced Change History tracking: when Save is clicked, capture `reason` alongside each changed field entry (prompt user for reason in the confirmation dialog)
+- Save confirmation dialog state and handler
 
 ### Modify
-
-- `ChangeEntry` interface in `equipmentNodes.ts`: add optional `reason?: string` (already present) — no change needed.
-- `handleApprove` in `DataManager.tsx`: after approving a revised record, mark the `originalId` record as Superseded and add change history entry.
-- Edit button in toolbar (`data-ocid="data_manager.save_button"`) — when status === 'Approved', show "Revise" instead of "Edit".
-- Change History tab — add `Reason` column.
-- Logbook tab — include reason when present.
-- Card status badge — add Superseded styling.
+- `handleEdit`: Remove the block that prevents editing Approved records; allow editing for both Draft and Approved status
+- `handleSave`: Remove the block that prevents saving Approved records; wrap with confirmation dialog before saving; capture reason from confirmation dialog
+- Detail header button logic: Replace the `Approved → Revise` / `Draft → Edit` conditional with a single **Edit** button visible for both Draft and Approved (hide for Superseded only); remove Revise button
+- Detail header: Remove the Read-only lock badge shown for Approved records
+- Tabs: Remove the `"Versions"` TabsTrigger and TabsContent entirely
+- Detail header: Remove the Workflow button JSX block (keep navigation import and backend logic intact)
+- Status badge: Keep showing Draft/Approved badge; remove Superseded-specific handling in the read-only lock display
 
 ### Remove
-
-- Nothing removed.
+- `reviseDialogOpen` state
+- `reviseReason` state  
+- `handleRevise` function
+- `handleConfirmRevise` function
+- Revise dialog JSX block (Dialog for revise reason)
+- Versions TabsTrigger and TabsContent
+- Workflow Button JSX block in detail header
+- Version badge (`v{currentNode.versionNumber}`) display in detail header
+- Read-only lock icon display in header for Approved records
+- All guards in `handleEdit`/`handleSave` that block Approved records
 
 ## Implementation Plan
 
-1. **Update `gmpValidation.ts`** — add `'Superseded'` to `GmpStatus` type.
-2. **Update `equipmentNodes.ts`** — add `versionNumber`, `originalId`, `revisedById`, `changeControlReason` fields to `EquipmentNode` interface.
-3. **Update `DataManager.tsx`**:
-   a. Add state: `reviseDialogOpen`, `reviseReason`.
-   b. Add `handleRevise()` — opens revision dialog.
-   c. Add `handleConfirmRevise()` — creates duplicate node with Draft status, incremented version, originalId.
-   d. Update `handleApprove()` — if node has `originalId`, mark the original as Superseded, set `revisedById` on original.
-   e. Update toolbar Edit/Save button — show "Revise" when Approved.
-   f. Update detail header Edit button — show "Revise" with GitBranch icon when Approved.
-   g. Add "Version History" tab between Logbook and Change History tabs.
-   h. Implement Version History tab content — query all nodes sharing the same version chain (by originalId / revisedById), display in reverse-version order with status, version, created date, and a "View" button.
-   i. Update card status badge — Superseded = gray badge.
-   j. Add Revision Dialog component (reason-for-change input, Confirm/Cancel).
-   k. Update Change History table to show Reason column.
+1. Remove `reviseDialogOpen`, `reviseReason` states
+2. Remove `handleRevise` and `handleConfirmRevise` functions
+3. Modify `handleEdit`: remove the `if (selected.status === "Approved") { toast.error... return; }` guard — allow editing any non-null record
+4. Add `saveConfirmOpen` and `saveConfirmReason` states
+5. Modify `handleSave`: instead of directly saving, open confirmation dialog; move actual save logic to `handleConfirmSave`
+6. Add `handleConfirmSave`: executes the existing save logic but includes `reason: saveConfirmReason` in each ChangeEntry
+7. In detail header buttons: remove the `currentNode.status === "Approved" ? <Revise button> : ...` conditional; show plain Edit button for all non-Superseded records; remove Workflow button JSX; remove Read-only lock badge; remove version badge display
+8. In Tabs: remove `<TabsTrigger value="versions">` and corresponding `<TabsContent value="versions">`
+9. Add save confirmation Dialog JSX with reason textarea
+10. Remove the Revise Dialog JSX block

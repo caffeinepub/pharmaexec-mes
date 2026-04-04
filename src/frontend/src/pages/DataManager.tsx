@@ -35,7 +35,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -44,10 +43,8 @@ import {
   Database,
   Edit2,
   FileDown,
-  GitBranch,
   HelpCircle,
   History,
-  Lock,
   Plus,
   Save,
   Search,
@@ -237,7 +234,6 @@ function GmpIndicatorDot({ color }: { color: "green" | "yellow" | "red" }) {
 }
 
 export default function DataManager() {
-  const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [nodes, setNodes] = useState<EquipmentNode[]>(INITIAL_DATA);
@@ -257,8 +253,6 @@ export default function DataManager() {
   const [validateResult, setValidateResult] = useState<ValidationResult | null>(
     null,
   );
-  const [reviseDialogOpen, setReviseDialogOpen] = useState(false);
-  const [reviseReason, setReviseReason] = useState("");
 
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -301,20 +295,21 @@ export default function DataManager() {
 
   const handleEdit = () => {
     if (!selected) return;
-    if (selected.status === "Approved") {
-      toast.error("Approved records are read-only. Cannot edit.");
-      return;
-    }
     setDraft({ ...selected });
     setEditMode(true);
   };
 
+  const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
+  const [saveConfirmReason, setSaveConfirmReason] = useState("");
+
   const handleSave = () => {
     if (!draft) return;
-    if (draft.status === "Approved") {
-      toast.error("Approved records cannot be edited.");
-      return;
-    }
+    setSaveConfirmReason("");
+    setSaveConfirmOpen(true);
+  };
+
+  const handleConfirmSave = () => {
+    if (!draft) return;
     const now = new Date().toISOString();
     const prev = nodes.find((n) => n.id === draft.id);
     const changes: ChangeEntry[] = [];
@@ -337,6 +332,7 @@ export default function DataManager() {
             oldValue: oldVal,
             newValue: newVal,
             changedBy: "Dr. Sarah Chen",
+            reason: saveConfirmReason,
           });
         }
       }
@@ -350,6 +346,7 @@ export default function DataManager() {
     );
     setEditMode(false);
     setDraft(null);
+    setSaveConfirmOpen(false);
     toast.success("Changes saved successfully");
   };
 
@@ -465,48 +462,6 @@ export default function DataManager() {
     setValidateDialogOpen(true);
   };
 
-  const handleRevise = () => {
-    if (!selected || selected.status !== "Approved") return;
-    setReviseReason("");
-    setReviseDialogOpen(true);
-  };
-
-  const handleConfirmRevise = () => {
-    if (!selected || !reviseReason.trim()) return;
-    const now = new Date().toISOString();
-    const newId = `node_${Date.now()}`;
-    const rootId = selected.originalId ?? selected.id;
-    const newVersion = (selected.versionNumber ?? 1) + 1;
-    const newNode: EquipmentNode = {
-      ...selected,
-      id: newId,
-      status: "Draft",
-      versionNumber: newVersion,
-      originalId: rootId,
-      revisedById: null,
-      changeControlReason: reviseReason,
-      createdAt: now,
-      changeHistory: [
-        {
-          timestamp: now,
-          field: "status",
-          oldValue: "Approved",
-          newValue: "Draft",
-          changedBy: "Dr. Sarah Chen",
-          action: "Create",
-          reason: reviseReason,
-        },
-      ],
-    };
-    setNodes((prev) => [...prev, newNode]);
-    setReviseDialogOpen(false);
-    setSelectedId(newId);
-    setReviseReason("");
-    toast.success(
-      `Revision v${newVersion} created as Draft — ready for editing`,
-    );
-  };
-
   const currentNode = selectedId
     ? editMode && draft
       ? draft
@@ -597,13 +552,7 @@ export default function DataManager() {
               size="sm"
               variant="outline"
               className="h-7 gap-1 text-[12px] px-3"
-              onClick={
-                editMode
-                  ? handleSave
-                  : selected?.status === "Approved"
-                    ? handleRevise
-                    : handleEdit
-              }
+              onClick={editMode ? handleSave : handleEdit}
               disabled={!selected || selected?.status === "Superseded"}
               data-ocid="data_manager.save_button"
             >
@@ -611,13 +560,9 @@ export default function DataManager() {
                 <>
                   <Save size={13} /> Save
                 </>
-              ) : selected?.status === "Approved" ? (
-                <>
-                  <GitBranch size={13} /> Revise
-                </>
               ) : (
                 <>
-                  <Save size={13} /> Edit
+                  <Edit2 size={13} /> Edit
                 </>
               )}
             </Button>
@@ -914,17 +859,6 @@ export default function DataManager() {
                           ? "⊘ Superseded"
                           : "Draft"}
                     </span>
-                    {currentNode.versionNumber &&
-                      currentNode.versionNumber > 1 && (
-                        <span className="text-[10px] text-muted-foreground border border-border px-1.5 py-0.5 rounded">
-                          v{currentNode.versionNumber}
-                        </span>
-                      )}
-                    {currentNode.status === "Approved" && (
-                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                        <Lock size={10} /> Read-only
-                      </span>
-                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 justify-end ml-2">
@@ -953,17 +887,7 @@ export default function DataManager() {
                     </>
                   ) : (
                     <>
-                      {currentNode.status === "Approved" ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 text-[12px] px-3 text-blue-700 border-blue-300 hover:bg-blue-50"
-                          onClick={handleRevise}
-                          data-ocid="data_manager.revise_button"
-                        >
-                          <GitBranch size={12} /> Revise
-                        </Button>
-                      ) : currentNode.status === "Superseded" ? null : (
+                      {currentNode.status !== "Superseded" && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -995,18 +919,6 @@ export default function DataManager() {
                           data-ocid="data_manager.validate_button"
                         >
                           <CheckCircle2 size={12} /> Validate
-                        </Button>
-                      )}
-                      {(currentNode.entityType === "EquipmentEntity" ||
-                        currentNode.entityType === "EquipmentClass") && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 text-[12px] px-3"
-                          onClick={() => navigate({ to: "/workflow-designer" })}
-                          data-ocid="data_manager.workflow_designer.button"
-                        >
-                          <GitBranch size={12} /> Workflow
                         </Button>
                       )}
                     </>
@@ -1065,13 +977,7 @@ export default function DataManager() {
                       >
                         Logbook
                       </TabsTrigger>
-                      <TabsTrigger
-                        value="versions"
-                        className="h-6 px-3 text-[11.5px]"
-                        data-ocid="data_manager.versions.tab"
-                      >
-                        Versions
-                      </TabsTrigger>
+
                       <TabsTrigger
                         value="history"
                         className="h-6 px-3 text-[11.5px]"
@@ -2214,103 +2120,6 @@ export default function DataManager() {
                     </TabsContent>
                   )}
 
-                  {/* VERSION HISTORY TAB */}
-                  <TabsContent
-                    value="versions"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
-                  >
-                    <SectionHeader title="Version History" />
-                    {(() => {
-                      const rootId = currentNode.originalId ?? currentNode.id;
-                      const allVersions = nodes
-                        .filter(
-                          (n) => n.id === rootId || n.originalId === rootId,
-                        )
-                        .sort(
-                          (a, b) =>
-                            (b.versionNumber ?? 1) - (a.versionNumber ?? 1),
-                        );
-
-                      if (allVersions.length <= 1 && !currentNode.originalId) {
-                        return (
-                          <div className="text-[12px] text-muted-foreground py-6 text-center">
-                            No revision history. This is the original record
-                            (v1).
-                            <br />
-                            Click &quot;Revise&quot; to create a controlled
-                            change.
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <div className="space-y-2">
-                          {allVersions.map((v) => {
-                            const isActive = v.id === currentNode.id;
-                            return (
-                              <div
-                                key={v.id}
-                                className={cn(
-                                  "flex items-center gap-3 p-3 rounded-lg border",
-                                  isActive
-                                    ? "bg-blue-50 border-blue-200"
-                                    : "bg-muted/20 border-border",
-                                )}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="text-[12px] font-semibold">
-                                      v{v.versionNumber ?? 1}
-                                    </span>
-                                    <span
-                                      className={cn(
-                                        "text-[9.5px] font-semibold px-1.5 py-0.5 rounded-full border",
-                                        {
-                                          "bg-green-50 text-green-700 border-green-200":
-                                            v.status === "Approved",
-                                          "bg-amber-50 text-amber-700 border-amber-200":
-                                            v.status === "Draft" || !v.status,
-                                          "bg-gray-100 text-gray-500 border-gray-200":
-                                            v.status === "Superseded",
-                                        },
-                                      )}
-                                    >
-                                      {v.status ?? "Draft"}
-                                    </span>
-                                    {isActive && (
-                                      <span className="text-[9.5px] bg-blue-100 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-full font-semibold">
-                                        Current View
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    Created:{" "}
-                                    {new Date(v.createdAt).toLocaleString()}
-                                  </p>
-                                  {v.changeControlReason && (
-                                    <p className="text-[11px] text-muted-foreground mt-0.5 italic">
-                                      Reason: {v.changeControlReason}
-                                    </p>
-                                  )}
-                                </div>
-                                {!isActive && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-6 text-[11px] px-2 shrink-0"
-                                    onClick={() => handleSelect(v.id)}
-                                  >
-                                    View
-                                  </Button>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </TabsContent>
-
                   {/* LOGBOOK TAB */}
                   <TabsContent
                     value="logbook"
@@ -2590,12 +2399,12 @@ export default function DataManager() {
         </DialogContent>
       </Dialog>
 
-      {/* Revision (Change Control) Dialog */}
-      <Dialog open={reviseDialogOpen} onOpenChange={setReviseDialogOpen}>
+      {/* Save Confirmation Dialog */}
+      <Dialog open={saveConfirmOpen} onOpenChange={setSaveConfirmOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-[15px]">
-              <GitBranch size={16} className="text-blue-600" /> Create Revision
+              <Save size={16} className="text-primary" /> Confirm Changes
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
@@ -2604,51 +2413,41 @@ export default function DataManager() {
                 size={14}
                 className="shrink-0 mt-0.5 text-amber-600"
               />
-              <span>
-                This will create a Draft copy of{" "}
-                <strong>{selected?.shortDescription}</strong> for controlled
-                editing. The original Approved record will remain active until
-                the revision is approved.
-              </span>
+              <span>Are you sure you want to modify this record?</span>
             </div>
             <div className="space-y-1.5">
               <Label className="text-[12px] font-medium">
-                Reason for Change <span className="text-destructive">*</span>
+                Reason for Change{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
               </Label>
               <Textarea
-                value={reviseReason}
-                onChange={(e) => setReviseReason(e.target.value)}
-                placeholder="Describe the reason for this change (required for GMP audit trail)..."
+                value={saveConfirmReason}
+                onChange={(e) => setSaveConfirmReason(e.target.value)}
+                placeholder="Reason for change (optional)"
                 className="text-[12px] min-h-[80px] resize-none"
-                data-ocid="data_manager.revise_reason.textarea"
+                data-ocid="data_manager.save_reason.textarea"
               />
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              New revision will be:{" "}
-              <span className="font-mono font-semibold">
-                {selected?.identifier}
-              </span>{" "}
-              v{(selected?.versionNumber ?? 1) + 1}
-            </p>
           </div>
           <Separator />
           <DialogFooter className="gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setReviseDialogOpen(false)}
-              data-ocid="data_manager.revise_cancel_button"
+              onClick={() => setSaveConfirmOpen(false)}
+              data-ocid="data_manager.save_cancel_button"
             >
               Cancel
             </Button>
             <Button
               size="sm"
-              onClick={handleConfirmRevise}
-              disabled={!reviseReason.trim()}
+              onClick={handleConfirmSave}
               className="gap-1"
-              data-ocid="data_manager.revise_confirm_button"
+              data-ocid="data_manager.save_confirm_button"
             >
-              <GitBranch size={13} /> Create Revision
+              <Save size={13} /> Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>
