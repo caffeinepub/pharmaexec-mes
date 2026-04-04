@@ -51,6 +51,7 @@ import {
   Shield,
   Trash2,
   Unlock,
+  XCircle,
   Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
@@ -61,6 +62,9 @@ import type { BatchRecord } from "../backend";
 import { FieldTooltip } from "../components/FieldTooltip";
 import { useAllBatchRecords, useCreateBatchRecord } from "../hooks/useQueries";
 import { PRODUCTS } from "../lib/mesData";
+
+import { INITIAL_DATA } from "../lib/equipmentNodes";
+import { validateExecution } from "../lib/gmpValidation";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -615,6 +619,14 @@ export default function BatchRecords() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const [gmpBlockOpen, setGmpBlockOpen] = useState(false);
+  const [gmpBlockResult, setGmpBlockResult] = useState<{
+    success: boolean;
+    errors: string[];
+    warnings: string[];
+  } | null>(null);
+  const [gmpBlockEquipId, setGmpBlockEquipId] = useState("");
+
   // Local overrides for status changes
   const [statusOverrides, setStatusOverrides] = useState<
     Record<string, PharmaSuiteStatus>
@@ -750,8 +762,97 @@ export default function BatchRecords() {
   };
   const doRelease = () => {
     if (!selectedOrder) return;
+
+    // Find equipment entities used by this order's steps
+    const equipmentNodes = INITIAL_DATA.filter(
+      (n) =>
+        n.entityType === "EquipmentEntity" || n.entityType === "EquipmentClass",
+    );
+
+    // Try to match order steps' work centers to equipment identifiers
+    const stepsToCheck = selectedOrder.steps ?? [];
+    let blockingResult: {
+      success: boolean;
+      errors: string[];
+      warnings: string[];
+    } | null = null;
+    let blockingEquipId = "";
+
+    for (const step of stepsToCheck) {
+      const matchedEquip = equipmentNodes.find(
+        (n) =>
+          n.identifier.includes(step.workCenter) ||
+          step.workCenter.includes(n.identifier) ||
+          (step.workCenter &&
+            n.identifier &&
+            step.workCenter.split("-").slice(1).join("-") ===
+              n.identifier.split("-").slice(1).join("-")),
+      );
+
+      if (matchedEquip) {
+        const result = validateExecution({
+          equipment: {
+            status: matchedEquip.status ?? "Draft",
+            maintenance_status: matchedEquip.maintenance_status ?? "Active",
+            health_status: matchedEquip.health_status ?? "Good",
+            pm_due_date: matchedEquip.pm_due_date ?? "",
+            cleaningLog: matchedEquip.cleaningLog ?? null,
+            cleaningRules: matchedEquip.cleaningRules ?? [],
+          },
+          equipmentId: matchedEquip.identifier,
+        });
+
+        if (!result.success) {
+          blockingResult = result;
+          blockingEquipId = matchedEquip.identifier;
+          break;
+        }
+      }
+    }
+
+    // Fallback: check coating equipment if batch has coating step
+    if (!blockingResult && equipmentNodes.length > 0) {
+      const coatingStep = stepsToCheck.find((s) =>
+        s.workCenter?.includes("COAT"),
+      );
+      if (coatingStep) {
+        const coatingEquip = equipmentNodes.find((n) =>
+          n.identifier.includes("COAT"),
+        );
+        if (coatingEquip) {
+          const result = validateExecution({
+            equipment: {
+              status: coatingEquip.status ?? "Draft",
+              maintenance_status: coatingEquip.maintenance_status ?? "Active",
+              health_status: coatingEquip.health_status ?? "Good",
+              pm_due_date: coatingEquip.pm_due_date ?? "",
+              cleaningLog: coatingEquip.cleaningLog ?? null,
+              cleaningRules: coatingEquip.cleaningRules ?? [],
+            },
+            equipmentId: coatingEquip.identifier,
+          });
+          if (!result.success) {
+            blockingResult = result;
+            blockingEquipId = coatingEquip.identifier;
+          }
+        }
+      }
+    }
+
+    if (blockingResult && !blockingResult.success) {
+      setGmpBlockResult(blockingResult);
+      setGmpBlockEquipId(blockingEquipId);
+      setGmpBlockOpen(true);
+      return; // block release
+    }
+
+    // All GMP checks passed — proceed with release
     setStatusOverrides((p) => ({ ...p, [selectedOrder.batchId]: "Released" }));
-    toast.success(`Order ${selectedOrder.batchId} released for production`);
+    if (blockingResult?.warnings?.length) {
+      toast.warning(`Order released with GMP warnings for ${blockingEquipId}`);
+    } else {
+      toast.success(`Order ${selectedOrder.batchId} released for production`);
+    }
   };
   const doUnrelease = () => {
     if (!selectedOrder) return;
@@ -1796,6 +1897,70 @@ export default function BatchRecords() {
                 Close
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* GMP Validation Blocking Dialog */}
+      <Dialog open={gmpBlockOpen} onOpenChange={setGmpBlockOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <XCircle size={18} /> GMP Validation Failed — Release Blocked
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-[13px] text-muted-foreground">
+              Equipment{" "}
+              <span className="font-mono font-semibold">{gmpBlockEquipId}</span>{" "}
+              did not pass GMP validation. Resolve all errors before releasing
+              this order.
+            </p>
+            {gmpBlockResult?.errors && gmpBlockResult.errors.length > 0 && (
+              <div>
+                <p className="text-[12px] font-semibold text-red-700 mb-1">
+                  Errors ({gmpBlockResult.errors.length})
+                </p>
+                <ul className="space-y-1">
+                  {gmpBlockResult.errors.map((e) => (
+                    <li
+                      key={e}
+                      className="flex items-start gap-2 text-[12px] text-red-700 bg-red-50 rounded px-2 py-1"
+                    >
+                      <XCircle size={13} className="mt-0.5 shrink-0" /> {e}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {gmpBlockResult?.warnings && gmpBlockResult.warnings.length > 0 && (
+              <div>
+                <p className="text-[12px] font-semibold text-amber-700 mb-1">
+                  Warnings
+                </p>
+                <ul className="space-y-1">
+                  {gmpBlockResult.warnings.map((w) => (
+                    <li
+                      key={w}
+                      className="flex items-start gap-2 text-[12px] text-amber-700 bg-amber-50 rounded px-2 py-1"
+                    >
+                      <AlertTriangle size={13} className="mt-0.5 shrink-0" />{" "}
+                      {w}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setGmpBlockOpen(false)}
+              data-ocid="gmp_block.close_button"
+            >
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

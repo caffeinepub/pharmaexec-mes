@@ -1,60 +1,57 @@
-# PharmaExec MES — Planning & Scheduling: Advanced Resolution & Simulation
+# PharmaExec MES — Change Control Revision Workflow
 
 ## Current State
-ProductionPlanning.tsx is a large single-file module (~168KB) with:
-- Campaign planning with dirty hold, PM, holiday, and shift constraints
-- Gantt chart (hourly, 24h, monthly view)
-- Feasibility tab for plan change testing
-- Holiday calendar (currently no type distinction — all holidays are hard blocks)
-- Shift A/B/C (07-15, 15-23, 23-07)
-- Conflict resolution with basic options
-- Export Excel (4-sheet workbook)
+
+- `DataManager.tsx` manages `EquipmentNode[]` in local state, initialized from `INITIAL_DATA` in `equipmentNodes.ts`.
+- Each node has `status: 'Draft' | 'Approved'` and `changeHistory: ChangeEntry[]`.
+- `EquipmentNode.changeHistory` tracks field-level diffs with `timestamp`, `field`, `oldValue`, `newValue`, `changedBy`, and optional `reason`.
+- When `status === 'Approved'`, the Edit button is disabled and a lock icon is shown; direct editing is blocked.
+- An "Approve" button transitions a Draft record to Approved.
+- No revision/duplication workflow exists. No concept of `superseded` status or version lineage.
 
 ## Requested Changes (Diff)
 
 ### Add
-- **Holiday types:** Hard (no work allowed) / Soft (work allowed with approval flag)
-- **"Work on holiday" resolution option** in conflict resolution panel — only shown when holiday is Soft
-- **Holiday flag on tasks** — tasks scheduled on Soft holidays get a visual marker (⚠️ holiday override badge)
-- **Approval required** indicator when working on a Soft holiday
-- **What-if Simulation Engine:**
-  - "Simulate" button on Gantt task click → opens simulation panel
-  - Clones current schedule in memory (no mutations to actual data)
-  - Applies selected user change to the clone
-  - Re-runs scheduling engine on clone
-  - Shows impact comparison table (before vs. after):
-    - Completion time
-    - Conflict count
-    - Cleaning count
-    - Equipment utilization %
-- **Simulation Options:**
-  - Delay task (+1 hr, +2 hr)
-  - Move to next shift
-  - Move to alternate equipment
-  - Work on holiday (if Soft holiday)
-- **Ghost Gantt bars** — semi-transparent bars overlaid on Gantt showing simulated task positions
-- **Risk highlights** — simulated tasks that create new conflicts shown in red outline
-- **Insights panel** — warnings for: new conflicts introduced, deadline risk, extra cleaning triggered
-- **"Apply Simulation" button** — promotes simulated schedule to actual
-- **"Discard" button** — clears simulation overlay
+
+- **`Superseded` status** to `GmpStatus` type in `gmpValidation.ts`.
+- **`versionNumber` field** on `EquipmentNode` (number, default 1).
+- **`originalId` field** on `EquipmentNode` (string | null) — points to the record this was revised from.
+- **`revisedById` field** on `EquipmentNode` (string | null) — reverse pointer: which record superseded this one.
+- **`changeControlReason` field** on `EquipmentNode` (string) — reason captured at revision time.
+- **"Revise" button** in the detail header (replaces Edit when status === 'Approved').
+- **Revision dialog** — prompts user for "Reason for Change" before creating the draft duplicate.
+- **Revision creation logic** — duplicates the Approved record with a new id, status='Draft', versionNumber incremented, originalId set, preserves all fields.
+- **Approval logic update** — when approving a revised record (originalId set), automatically set the original record's status to 'Superseded'.
+- **"Version History" tab** in the right-panel tabs — shows all versions of the record (original + revisions), with version number, status badge, timestamp, and a "View" button to navigate to that version.
+- **Superseded status styling** — gray badge with strikethrough for superseded records in cards and header.
+- **Superseded card indicator** — grayed-out style on cards for superseded records.
 
 ### Modify
-- Holiday calendar UI: add Hard/Soft toggle per holiday entry
-- Conflict resolution dialog: add "Work on holiday" option with impact display (delay avoided, approval required)
-- Gantt bar rendering: show holiday-override badge on affected tasks
+
+- `ChangeEntry` interface in `equipmentNodes.ts`: add optional `reason?: string` (already present) — no change needed.
+- `handleApprove` in `DataManager.tsx`: after approving a revised record, mark the `originalId` record as Superseded and add change history entry.
+- Edit button in toolbar (`data-ocid="data_manager.save_button"`) — when status === 'Approved', show "Revise" instead of "Edit".
+- Change History tab — add `Reason` column.
+- Logbook tab — include reason when present.
+- Card status badge — add Superseded styling.
 
 ### Remove
-- Nothing removed
+
+- Nothing removed.
 
 ## Implementation Plan
-1. Extend holiday data model: add `type: 'hard' | 'soft'` field; default existing holidays to 'hard'
-2. Update holiday calendar UI to allow type selection per entry
-3. Update scheduling engine: Soft holidays no longer block scheduling but set `holidayOverride: true` flag on the task
-4. Update conflict resolution dialog: add "Work on holiday" option (conditional on Soft holiday), show delay avoided and approval required
-5. Add simulation engine function: `runSimulation(schedule, change)` → cloned schedule recalculation
-6. Add simulation panel (side drawer or bottom panel, opens on Gantt task click)
-7. Add simulation option buttons (delay +1hr, +2hr, next shift, alternate equipment, work on holiday)
-8. Add ghost bar rendering in Gantt SVG (semi-transparent, dashed outline)
-9. Add impact comparison table (before vs after)
-10. Add insights/warnings panel (new conflicts, deadline risk, extra cleaning)
-11. Apply / Discard simulation actions
+
+1. **Update `gmpValidation.ts`** — add `'Superseded'` to `GmpStatus` type.
+2. **Update `equipmentNodes.ts`** — add `versionNumber`, `originalId`, `revisedById`, `changeControlReason` fields to `EquipmentNode` interface.
+3. **Update `DataManager.tsx`**:
+   a. Add state: `reviseDialogOpen`, `reviseReason`.
+   b. Add `handleRevise()` — opens revision dialog.
+   c. Add `handleConfirmRevise()` — creates duplicate node with Draft status, incremented version, originalId.
+   d. Update `handleApprove()` — if node has `originalId`, mark the original as Superseded, set `revisedById` on original.
+   e. Update toolbar Edit/Save button — show "Revise" when Approved.
+   f. Update detail header Edit button — show "Revise" with GitBranch icon when Approved.
+   g. Add "Version History" tab between Logbook and Change History tabs.
+   h. Implement Version History tab content — query all nodes sharing the same version chain (by originalId / revisedById), display in reverse-version order with status, version, created date, and a "View" button.
+   i. Update card status badge — Superseded = gray badge.
+   j. Add Revision Dialog component (reason-for-change input, Confirm/Cancel).
+   k. Update Change History table to show Reason column.

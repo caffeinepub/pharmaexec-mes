@@ -1,7 +1,7 @@
 // GMP Validation Engine — PharmaExec MES
 // Central validation utilities for GMP compliance checks
 
-export type GmpStatus = "Draft" | "Approved";
+export type GmpStatus = "Draft" | "Approved" | "Superseded";
 export type MaintenanceStatus = "Active" | "Under Maintenance";
 export type HealthStatus = "Good" | "Bad";
 export type CleaningLevel = "None" | "Minor" | "Major";

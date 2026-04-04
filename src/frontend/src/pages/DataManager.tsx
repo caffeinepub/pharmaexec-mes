@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Clock,
@@ -45,6 +46,7 @@ import {
   FileDown,
   GitBranch,
   HelpCircle,
+  History,
   Lock,
   Plus,
   Save,
@@ -58,6 +60,12 @@ import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ReportDialog } from "../components/ReportDialog";
 import { helpContent } from "../data/helpContent";
+import {
+  type ChangeEntry,
+  type EntityType,
+  type EquipmentNode,
+  INITIAL_DATA,
+} from "../lib/equipmentNodes";
 import {
   type CleaningLevel,
   type CleaningLogEntry,
@@ -85,65 +93,6 @@ const _PRODUCTS = [
   "Ciprofloxacin 500mg",
   "Paracetamol 500mg",
 ];
-
-type EntityType =
-  | "WorkCenter"
-  | "Station"
-  | "EquipmentClass"
-  | "EquipmentEntity"
-  | "PropertyType";
-
-interface ChangeEntry {
-  timestamp: string;
-  field: string;
-  oldValue: string;
-  newValue: string;
-  changedBy: string;
-  action?: "Create" | "Update" | "Delete";
-  reason?: string;
-}
-
-interface EquipmentNode {
-  id: string;
-  identifier: string;
-  shortDescription: string;
-  description: string;
-  level: string;
-  inventoryNumber: string;
-  manufacturer: string;
-  externalId: string;
-  serialNumber: string;
-  manufacturingDate: string;
-  disposed: boolean;
-  barcode: string;
-  barcodeEnabled: boolean;
-  entityType: EntityType;
-  parentId: string | null;
-  automationServerNameDefault: string;
-  automationServerName: string;
-  dataOpsPath: string;
-  historianProvider: string;
-  historianAccessServerDefault: string;
-  historianAccessServer: string;
-  historianServerDefault: string;
-  historianServer: string;
-  createdAt: string;
-  changeHistory: ChangeEntry[];
-  // GMP fields
-  status?: GmpStatus;
-  maintenance_status?: MaintenanceStatus;
-  health_status?: HealthStatus;
-  last_maintenance_date?: string;
-  pm_due_date?: string;
-  cleaningRules?: CleaningRule[];
-  cleaningLog?: CleaningLogEntry | null;
-  // PropertyType capability fields
-  min_value?: string;
-  max_value?: string;
-  required_min?: string;
-  required_max?: string;
-  comparison_type?: ComparisonType | "";
-}
 
 const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
   WorkCenter: "Work Center",
@@ -184,585 +133,6 @@ const ENTITY_COLORS: Record<
   },
 };
 
-const INITIAL_DATA: EquipmentNode[] = [
-  {
-    id: "wc1",
-    identifier: "WC-COAT-001",
-    shortDescription: "W&C Coater",
-    description: "Coating Unit Work Center — primary film-coating line",
-    level: "1",
-    inventoryNumber: "INV-2021-0441",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "WC001",
-    serialNumber: "PML-2021-C001",
-    manufacturingDate: "2021-03-15",
-    disposed: false,
-    barcode: "BC-WC-001",
-    barcodeEnabled: true,
-    entityType: "WorkCenter",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-COAT-01",
-    dataOpsPath: "/pharma/coating/wc001",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-COAT-01",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-10T08:00:00Z",
-    changeHistory: [
-      {
-        timestamp: "2024-06-12T14:32:00Z",
-        field: "automationServerName",
-        oldValue: "AIS-OLD",
-        newValue: "AIS-COAT-01",
-        changedBy: "Dr. Sarah Chen",
-      },
-    ],
-    status: "Approved",
-  },
-  {
-    id: "wc2",
-    identifier: "WC-COAT-002",
-    shortDescription: "W&C Coater-A",
-    description: "Coating Unit Work Center — automated secondary line",
-    level: "1",
-    inventoryNumber: "INV-2022-0552",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "WC002",
-    serialNumber: "PML-2022-C002",
-    manufacturingDate: "2022-07-20",
-    disposed: false,
-    barcode: "BC-WC-002",
-    barcodeEnabled: true,
-    entityType: "WorkCenter",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-COAT-02",
-    dataOpsPath: "/pharma/coating/wc002",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-COAT-02",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-10T08:30:00Z",
-    changeHistory: [],
-    status: "Draft",
-  },
-  {
-    id: "sta1",
-    identifier: "STA-FEED-001",
-    shortDescription: "Sta Feeder",
-    description: "Coating Unit Feeder Station",
-    level: "2",
-    inventoryNumber: "INV-2021-0442",
-    manufacturer: "Fluid Air Inc",
-    externalId: "STA001",
-    serialNumber: "FAI-2021-F001",
-    manufacturingDate: "2021-04-10",
-    disposed: false,
-    barcode: "BC-STA-001",
-    barcodeEnabled: true,
-    entityType: "Station",
-    parentId: "wc1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/coating/wc001/feeder",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-11T09:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-  },
-  {
-    id: "sta2",
-    identifier: "STA-FEED-002",
-    shortDescription: "Sta Feeder-A",
-    description: "Coating Unit Feeder Duplicate Station",
-    level: "2",
-    inventoryNumber: "INV-2021-0443",
-    manufacturer: "Fluid Air Inc",
-    externalId: "STA002",
-    serialNumber: "FAI-2021-F002",
-    manufacturingDate: "2021-04-12",
-    disposed: false,
-    barcode: "BC-STA-002",
-    barcodeEnabled: true,
-    entityType: "Station",
-    parentId: "wc1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-FEED-02",
-    dataOpsPath: "/pharma/coating/wc001/feeder-a",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-11T09:15:00Z",
-    changeHistory: [],
-    status: "Draft",
-  },
-  {
-    id: "sta3",
-    identifier: "STA-VESS-001",
-    shortDescription: "Sta Vessel",
-    description: "Coating Unit Vessel Station",
-    level: "2",
-    inventoryNumber: "INV-2021-0444",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "STA003",
-    serialNumber: "PML-2021-V001",
-    manufacturingDate: "2021-04-15",
-    disposed: false,
-    barcode: "BC-STA-003",
-    barcodeEnabled: false,
-    entityType: "Station",
-    parentId: "wc1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/coating/wc001/vessel",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-11T09:30:00Z",
-    changeHistory: [],
-    status: "Approved",
-  },
-  {
-    id: "sta4",
-    identifier: "STA-VESS-002",
-    shortDescription: "Sta Vessel-A",
-    description: "Coating Unit Vessel Automated Station",
-    level: "2",
-    inventoryNumber: "INV-2022-0553",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "STA004",
-    serialNumber: "PML-2022-V002",
-    manufacturingDate: "2022-08-01",
-    disposed: false,
-    barcode: "BC-STA-004",
-    barcodeEnabled: true,
-    entityType: "Station",
-    parentId: "wc2",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-VESS-02",
-    dataOpsPath: "/pharma/coating/wc002/vessel-a",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-VESS-02",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-11T10:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-  },
-  {
-    id: "ec1",
-    identifier: "EC-COAT-001",
-    shortDescription: "Coaters",
-    description: "Non-automated coating equipment class",
-    level: "1",
-    inventoryNumber: "INV-CLASS-001",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "EC001",
-    serialNumber: "",
-    manufacturingDate: "",
-    disposed: false,
-    barcode: "",
-    barcodeEnabled: false,
-    entityType: "EquipmentClass",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/classes/coaters",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-05T07:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Active",
-    health_status: "Good",
-    pm_due_date: "2026-06-01",
-    cleaningRules: [],
-    cleaningLog: null,
-  },
-  {
-    id: "ec2",
-    identifier: "EC-COAT-002",
-    shortDescription: "Coaters-A",
-    description: "Automated coating equipment class",
-    level: "1",
-    inventoryNumber: "INV-CLASS-002",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "EC002",
-    serialNumber: "",
-    manufacturingDate: "",
-    disposed: false,
-    barcode: "",
-    barcodeEnabled: false,
-    entityType: "EquipmentClass",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-CLASS-02",
-    dataOpsPath: "/pharma/classes/coaters-a",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-05T07:30:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Active",
-    health_status: "Good",
-    pm_due_date: "2026-07-15",
-    cleaningRules: [],
-    cleaningLog: null,
-  },
-  // ee1: Approved, Active, Good, PM On Time — all green
-  {
-    id: "ee1",
-    identifier: "EE-COAT-S",
-    shortDescription: "Coater_S",
-    description: "Small non-automated coating unit",
-    level: "2",
-    inventoryNumber: "INV-2020-0310",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "EE001",
-    serialNumber: "PML-2020-CS01",
-    manufacturingDate: "2020-05-20",
-    disposed: false,
-    barcode: "BC-EE-001",
-    barcodeEnabled: true,
-    entityType: "EquipmentEntity",
-    parentId: "ec1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/equipment/coater-s",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-12T08:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Active",
-    health_status: "Good",
-    last_maintenance_date: "2025-12-01",
-    pm_due_date: "2026-06-01",
-    cleaningRules: [],
-    cleaningLog: {
-      lastProduct: "Amoxicillin 250mg",
-      lastCleanedDate: "2026-03-20",
-      cleaningLevel: "Major",
-    },
-  },
-  // ee2: Draft, Active, Good, PM Due Soon — yellow
-  {
-    id: "ee2",
-    identifier: "EE-COAT-M",
-    shortDescription: "Coater_M",
-    description: "Medium non-automated coating unit",
-    level: "2",
-    inventoryNumber: "INV-2020-0311",
-    manufacturer: "Pharma Machines Ltd",
-    externalId: "EE002",
-    serialNumber: "PML-2020-CM01",
-    manufacturingDate: "2020-06-10",
-    disposed: false,
-    barcode: "BC-EE-002",
-    barcodeEnabled: true,
-    entityType: "EquipmentEntity",
-    parentId: "ec1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/equipment/coater-m",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-12T08:15:00Z",
-    changeHistory: [],
-    status: "Draft",
-    maintenance_status: "Active",
-    health_status: "Good",
-    last_maintenance_date: "2025-11-15",
-    pm_due_date: "2026-04-09",
-    cleaningRules: [],
-    cleaningLog: null,
-  },
-  // ee3: Approved, Under Maintenance, Bad, PM Overdue — red
-  {
-    id: "ee3",
-    identifier: "EE-COAT-N",
-    shortDescription: "Coater_N",
-    description: "Nano non-automated coating unit",
-    level: "2",
-    inventoryNumber: "INV-2021-0315",
-    manufacturer: "Fluid Air Inc",
-    externalId: "EE003",
-    serialNumber: "FAI-2021-CN01",
-    manufacturingDate: "2021-01-25",
-    disposed: false,
-    barcode: "BC-EE-003",
-    barcodeEnabled: false,
-    entityType: "EquipmentEntity",
-    parentId: "ec1",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/equipment/coater-n",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-12T08:30:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Under Maintenance",
-    health_status: "Bad",
-    last_maintenance_date: "2025-09-10",
-    pm_due_date: "2026-03-15",
-    cleaningRules: [],
-    cleaningLog: null,
-  },
-  // ee4: Approved, Active, Good, PM OK, cleaning Required — red
-  {
-    id: "ee4",
-    identifier: "EE-COAT-AT",
-    shortDescription: "Coater_At",
-    description: "Automated tablet coating unit",
-    level: "2",
-    inventoryNumber: "INV-2022-0560",
-    manufacturer: "GEA Pharma Systems",
-    externalId: "EE004",
-    serialNumber: "GEA-2022-AT01",
-    manufacturingDate: "2022-03-14",
-    disposed: false,
-    barcode: "BC-EE-004",
-    barcodeEnabled: true,
-    entityType: "EquipmentEntity",
-    parentId: "ec2",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-EE-04",
-    dataOpsPath: "/pharma/equipment/coater-at",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-EE-04",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-12T09:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Active",
-    health_status: "Good",
-    last_maintenance_date: "2026-01-20",
-    pm_due_date: "2026-07-20",
-    cleaningRules: [
-      {
-        id: "cr1",
-        previousProduct: "Amoxicillin 500mg",
-        nextProduct: "Metformin 500mg",
-        requiredCleaningLevel: "Major",
-      },
-      {
-        id: "cr2",
-        previousProduct: "Ciprofloxacin 500mg",
-        nextProduct: "Paracetamol 500mg",
-        requiredCleaningLevel: "Minor",
-      },
-    ],
-    cleaningLog: {
-      lastProduct: "Amoxicillin 500mg",
-      lastCleanedDate: "2026-03-28",
-      cleaningLevel: "Minor",
-    },
-  },
-  // ee5: Draft, Active, Good, PM OK, cleaning OK — green
-  {
-    id: "ee5",
-    identifier: "EE-COAT-AM",
-    shortDescription: "Coater_AM",
-    description: "Automated membrane coating unit",
-    level: "2",
-    inventoryNumber: "INV-2022-0561",
-    manufacturer: "GEA Pharma Systems",
-    externalId: "EE005",
-    serialNumber: "GEA-2022-AM01",
-    manufacturingDate: "2022-04-08",
-    disposed: false,
-    barcode: "BC-EE-005",
-    barcodeEnabled: true,
-    entityType: "EquipmentEntity",
-    parentId: "ec2",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-EE-05",
-    dataOpsPath: "/pharma/equipment/coater-am",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-EE-05",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-12T09:15:00Z",
-    changeHistory: [],
-    status: "Draft",
-    maintenance_status: "Active",
-    health_status: "Good",
-    last_maintenance_date: "2026-02-10",
-    pm_due_date: "2026-08-10",
-    cleaningRules: [],
-    cleaningLog: {
-      lastProduct: "Paracetamol 500mg",
-      lastCleanedDate: "2026-03-30",
-      cleaningLevel: "Major",
-    },
-  },
-  // ee6: Approved, Active, Bad, PM Overdue — red
-  {
-    id: "ee6",
-    identifier: "EE-COAT-AK",
-    shortDescription: "Coater_Ak",
-    description: "Automated kinetic coating unit",
-    level: "2",
-    inventoryNumber: "INV-2023-0600",
-    manufacturer: "GEA Pharma Systems",
-    externalId: "EE006",
-    serialNumber: "GEA-2023-AK01",
-    manufacturingDate: "2023-01-30",
-    disposed: false,
-    barcode: "BC-EE-006",
-    barcodeEnabled: true,
-    entityType: "EquipmentEntity",
-    parentId: "ec2",
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "AIS-EE-06",
-    dataOpsPath: "/pharma/equipment/coater-ak",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "PI-EE-06",
-    historianServerDefault: "PIServer1",
-    historianServer: "PI-MAIN",
-    createdAt: "2024-01-12T09:30:00Z",
-    changeHistory: [],
-    status: "Approved",
-    maintenance_status: "Active",
-    health_status: "Bad",
-    last_maintenance_date: "2025-08-01",
-    pm_due_date: "2026-02-28",
-    cleaningRules: [],
-    cleaningLog: null,
-  },
-  {
-    id: "pt1",
-    identifier: "PT-BATCHID",
-    shortDescription: "Batch ID",
-    description: "Unique batch identifier property type",
-    level: "1",
-    inventoryNumber: "",
-    manufacturer: "",
-    externalId: "PT001",
-    serialNumber: "",
-    manufacturingDate: "",
-    disposed: false,
-    barcode: "",
-    barcodeEnabled: false,
-    entityType: "PropertyType",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/properties/batch-id",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-08T10:00:00Z",
-    changeHistory: [],
-    status: "Approved",
-    min_value: "",
-    max_value: "",
-    required_min: "",
-    required_max: "",
-    comparison_type: "",
-  },
-  {
-    id: "pt2",
-    identifier: "PT-COATPREP",
-    shortDescription: "Coater Prepared",
-    description: "Flag indicating coater has been prepared for batch",
-    level: "1",
-    inventoryNumber: "",
-    manufacturer: "",
-    externalId: "PT002",
-    serialNumber: "",
-    manufacturingDate: "",
-    disposed: false,
-    barcode: "",
-    barcodeEnabled: false,
-    entityType: "PropertyType",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/properties/coater-prepared",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-08T10:15:00Z",
-    changeHistory: [],
-    status: "Approved",
-    min_value: "",
-    max_value: "",
-    required_min: "",
-    required_max: "",
-    comparison_type: "",
-  },
-  {
-    id: "pt3",
-    identifier: "PT-DRUMSIZE",
-    shortDescription: "Drum Size",
-    description: "Coating drum volume in litres",
-    level: "1",
-    inventoryNumber: "",
-    manufacturer: "",
-    externalId: "PT003",
-    serialNumber: "",
-    manufacturingDate: "",
-    disposed: false,
-    barcode: "",
-    barcodeEnabled: false,
-    entityType: "PropertyType",
-    parentId: null,
-    automationServerNameDefault: "AutomationIntegrationServer1",
-    automationServerName: "",
-    dataOpsPath: "/pharma/properties/drum-size",
-    historianProvider: "PIConnector",
-    historianAccessServerDefault: "PIAccessServer1",
-    historianAccessServer: "",
-    historianServerDefault: "PIServer1",
-    historianServer: "",
-    createdAt: "2024-01-08T10:30:00Z",
-    changeHistory: [],
-    status: "Draft",
-    min_value: "10",
-    max_value: "200",
-    required_min: "50",
-    required_max: "150",
-    comparison_type: "WITHIN_RANGE",
-  },
-];
-
 const EMPTY_NODE: Omit<EquipmentNode, "id" | "createdAt" | "changeHistory"> = {
   identifier: "",
   shortDescription: "",
@@ -798,6 +168,10 @@ const EMPTY_NODE: Omit<EquipmentNode, "id" | "createdAt" | "changeHistory"> = {
   required_min: "",
   required_max: "",
   comparison_type: "",
+  versionNumber: 1,
+  originalId: null,
+  revisedById: null,
+  changeControlReason: "",
 };
 
 class DetailErrorBoundary extends React.Component<
@@ -883,6 +257,8 @@ export default function DataManager() {
   const [validateResult, setValidateResult] = useState<ValidationResult | null>(
     null,
   );
+  const [reviseDialogOpen, setReviseDialogOpen] = useState(false);
+  const [reviseReason, setReviseReason] = useState("");
 
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -980,29 +356,56 @@ export default function DataManager() {
   const handleApprove = () => {
     if (!selected) return;
     const now = new Date().toISOString();
-    setNodes((prev) =>
-      prev.map((n) =>
-        n.id === selected.id
-          ? {
-              ...n,
-              status: "Approved" as GmpStatus,
-              changeHistory: [
-                ...n.changeHistory,
-                {
-                  timestamp: now,
-                  field: "status",
-                  oldValue: "Draft",
-                  newValue: "Approved",
-                  changedBy: "Dr. Sarah Chen",
-                  action: "Update" as const,
-                  reason: "GMP Status Approval",
-                },
-              ],
-            }
-          : n,
-      ),
-    );
-    toast.success("Record approved successfully");
+    setNodes((prev) => {
+      return prev.map((n) => {
+        // Approve the current node
+        if (n.id === selected.id) {
+          return {
+            ...n,
+            status: "Approved" as GmpStatus,
+            changeHistory: [
+              ...n.changeHistory,
+              {
+                timestamp: now,
+                field: "status",
+                oldValue: n.status ?? "Draft",
+                newValue: "Approved",
+                changedBy: "Dr. Sarah Chen",
+                action: "Update" as const,
+                reason: "GMP Status Approval",
+              },
+            ],
+          };
+        }
+        // Supersede the original record if this is a revision
+        if (
+          selected.originalId &&
+          (n.id === selected.originalId ||
+            n.originalId === selected.originalId) &&
+          n.id !== selected.id
+        ) {
+          return {
+            ...n,
+            status: "Superseded" as GmpStatus,
+            revisedById: selected.id,
+            changeHistory: [
+              ...n.changeHistory,
+              {
+                timestamp: now,
+                field: "status",
+                oldValue: n.status ?? "Approved",
+                newValue: "Superseded",
+                changedBy: "Dr. Sarah Chen",
+                action: "Update" as const,
+                reason: `Superseded by revision v${selected.versionNumber ?? 2}: ${selected.changeControlReason ?? ""}`,
+              },
+            ],
+          };
+        }
+        return n;
+      });
+    });
+    toast.success("Record approved. Previous version marked as Superseded.");
   };
 
   const handleDelete = () => {
@@ -1060,6 +463,48 @@ export default function DataManager() {
     });
     setValidateResult(result);
     setValidateDialogOpen(true);
+  };
+
+  const handleRevise = () => {
+    if (!selected || selected.status !== "Approved") return;
+    setReviseReason("");
+    setReviseDialogOpen(true);
+  };
+
+  const handleConfirmRevise = () => {
+    if (!selected || !reviseReason.trim()) return;
+    const now = new Date().toISOString();
+    const newId = `node_${Date.now()}`;
+    const rootId = selected.originalId ?? selected.id;
+    const newVersion = (selected.versionNumber ?? 1) + 1;
+    const newNode: EquipmentNode = {
+      ...selected,
+      id: newId,
+      status: "Draft",
+      versionNumber: newVersion,
+      originalId: rootId,
+      revisedById: null,
+      changeControlReason: reviseReason,
+      createdAt: now,
+      changeHistory: [
+        {
+          timestamp: now,
+          field: "status",
+          oldValue: "Approved",
+          newValue: "Draft",
+          changedBy: "Dr. Sarah Chen",
+          action: "Create",
+          reason: reviseReason,
+        },
+      ],
+    };
+    setNodes((prev) => [...prev, newNode]);
+    setReviseDialogOpen(false);
+    setSelectedId(newId);
+    setReviseReason("");
+    toast.success(
+      `Revision v${newVersion} created as Draft — ready for editing`,
+    );
   };
 
   const currentNode = selectedId
@@ -1152,11 +597,29 @@ export default function DataManager() {
               size="sm"
               variant="outline"
               className="h-7 gap-1 text-[12px] px-3"
-              onClick={editMode ? handleSave : handleEdit}
-              disabled={!selected}
+              onClick={
+                editMode
+                  ? handleSave
+                  : selected?.status === "Approved"
+                    ? handleRevise
+                    : handleEdit
+              }
+              disabled={!selected || selected?.status === "Superseded"}
               data-ocid="data_manager.save_button"
             >
-              <Save size={13} /> {editMode ? "Save" : "Edit"}
+              {editMode ? (
+                <>
+                  <Save size={13} /> Save
+                </>
+              ) : selected?.status === "Approved" ? (
+                <>
+                  <GitBranch size={13} /> Revise
+                </>
+              ) : (
+                <>
+                  <Save size={13} /> Edit
+                </>
+              )}
             </Button>
 
             <Button
@@ -1302,6 +765,7 @@ export default function DataManager() {
                         isSelected
                           ? "ring-2 ring-primary ring-offset-1 shadow-md"
                           : "hover:shadow-sm hover:border-border",
+                        node.status === "Superseded" && "opacity-50",
                       )}
                     >
                       <div className="flex items-start justify-between gap-2 mb-1.5">
@@ -1385,6 +849,8 @@ export default function DataManager() {
                                   node.status === "Approved",
                                 "bg-amber-50 text-amber-700 border-amber-200":
                                   node.status === "Draft" || !node.status,
+                                "bg-gray-100 text-gray-400 border-gray-200":
+                                  node.status === "Superseded",
                               },
                             )}
                           >
@@ -1427,7 +893,7 @@ export default function DataManager() {
                     {currentNode.identifier}
                   </p>
                   {/* GMP Status badge */}
-                  <div className="flex items-center gap-2 mt-1.5">
+                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                     <span
                       className={cn(
                         "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
@@ -1437,13 +903,23 @@ export default function DataManager() {
                           "bg-amber-50 text-amber-700 border-amber-200":
                             currentNode.status === "Draft" ||
                             !currentNode.status,
+                          "bg-gray-100 text-gray-500 border-gray-200 line-through":
+                            currentNode.status === "Superseded",
                         },
                       )}
                     >
                       {currentNode.status === "Approved"
                         ? "✓ Approved"
-                        : "Draft"}
+                        : currentNode.status === "Superseded"
+                          ? "⊘ Superseded"
+                          : "Draft"}
                     </span>
+                    {currentNode.versionNumber &&
+                      currentNode.versionNumber > 1 && (
+                        <span className="text-[10px] text-muted-foreground border border-border px-1.5 py-0.5 rounded">
+                          v{currentNode.versionNumber}
+                        </span>
+                      )}
                     {currentNode.status === "Approved" && (
                       <span className="text-[10px] text-muted-foreground flex items-center gap-1">
                         <Lock size={10} /> Read-only
@@ -1477,30 +953,27 @@ export default function DataManager() {
                     </>
                   ) : (
                     <>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className={cn(
-                          "h-7 gap-1 text-[12px] px-3",
-                          currentNode.status === "Approved" &&
-                            "opacity-50 cursor-not-allowed",
-                        )}
-                        onClick={handleEdit}
-                        disabled={currentNode.status === "Approved"}
-                        title={
-                          currentNode.status === "Approved"
-                            ? "Approved records are read-only"
-                            : "Edit record"
-                        }
-                        data-ocid="data_manager.edit_button"
-                      >
-                        {currentNode.status === "Approved" ? (
-                          <Lock size={12} />
-                        ) : (
-                          <Edit2 size={12} />
-                        )}{" "}
-                        Edit
-                      </Button>
+                      {currentNode.status === "Approved" ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-blue-700 border-blue-300 hover:bg-blue-50"
+                          onClick={handleRevise}
+                          data-ocid="data_manager.revise_button"
+                        >
+                          <GitBranch size={12} /> Revise
+                        </Button>
+                      ) : currentNode.status === "Superseded" ? null : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3"
+                          onClick={handleEdit}
+                          data-ocid="data_manager.edit_button"
+                        >
+                          <Edit2 size={12} /> Edit
+                        </Button>
+                      )}
                       {(currentNode.status === "Draft" ||
                         !currentNode.status) && (
                         <Button
@@ -1591,6 +1064,13 @@ export default function DataManager() {
                         data-ocid="data_manager.logbook.tab"
                       >
                         Logbook
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="versions"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.versions.tab"
+                      >
+                        Versions
                       </TabsTrigger>
                       <TabsTrigger
                         value="history"
@@ -2734,6 +2214,103 @@ export default function DataManager() {
                     </TabsContent>
                   )}
 
+                  {/* VERSION HISTORY TAB */}
+                  <TabsContent
+                    value="versions"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
+                  >
+                    <SectionHeader title="Version History" />
+                    {(() => {
+                      const rootId = currentNode.originalId ?? currentNode.id;
+                      const allVersions = nodes
+                        .filter(
+                          (n) => n.id === rootId || n.originalId === rootId,
+                        )
+                        .sort(
+                          (a, b) =>
+                            (b.versionNumber ?? 1) - (a.versionNumber ?? 1),
+                        );
+
+                      if (allVersions.length <= 1 && !currentNode.originalId) {
+                        return (
+                          <div className="text-[12px] text-muted-foreground py-6 text-center">
+                            No revision history. This is the original record
+                            (v1).
+                            <br />
+                            Click &quot;Revise&quot; to create a controlled
+                            change.
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="space-y-2">
+                          {allVersions.map((v) => {
+                            const isActive = v.id === currentNode.id;
+                            return (
+                              <div
+                                key={v.id}
+                                className={cn(
+                                  "flex items-center gap-3 p-3 rounded-lg border",
+                                  isActive
+                                    ? "bg-blue-50 border-blue-200"
+                                    : "bg-muted/20 border-border",
+                                )}
+                              >
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[12px] font-semibold">
+                                      v{v.versionNumber ?? 1}
+                                    </span>
+                                    <span
+                                      className={cn(
+                                        "text-[9.5px] font-semibold px-1.5 py-0.5 rounded-full border",
+                                        {
+                                          "bg-green-50 text-green-700 border-green-200":
+                                            v.status === "Approved",
+                                          "bg-amber-50 text-amber-700 border-amber-200":
+                                            v.status === "Draft" || !v.status,
+                                          "bg-gray-100 text-gray-500 border-gray-200":
+                                            v.status === "Superseded",
+                                        },
+                                      )}
+                                    >
+                                      {v.status ?? "Draft"}
+                                    </span>
+                                    {isActive && (
+                                      <span className="text-[9.5px] bg-blue-100 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-full font-semibold">
+                                        Current View
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                                    Created:{" "}
+                                    {new Date(v.createdAt).toLocaleString()}
+                                  </p>
+                                  {v.changeControlReason && (
+                                    <p className="text-[11px] text-muted-foreground mt-0.5 italic">
+                                      Reason: {v.changeControlReason}
+                                    </p>
+                                  )}
+                                </div>
+                                {!isActive && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-6 text-[11px] px-2 shrink-0"
+                                    onClick={() => handleSelect(v.id)}
+                                  >
+                                    View
+                                  </Button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </TabsContent>
+
                   {/* LOGBOOK TAB */}
                   <TabsContent
                     value="logbook"
@@ -2809,6 +2386,9 @@ export default function DataManager() {
                             <TableHead className="text-[11px] h-7">
                               Changed By
                             </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Reason
+                            </TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -2833,6 +2413,9 @@ export default function DataManager() {
                                 </TableCell>
                                 <TableCell className="text-[11px] py-1.5">
                                   {entry.changedBy}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5 text-muted-foreground italic">
+                                  {entry.reason ?? "—"}
                                 </TableCell>
                               </TableRow>
                             ))}
@@ -3002,6 +2585,70 @@ export default function DataManager() {
               data-ocid="data_manager.new_submit_button"
             >
               Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Revision (Change Control) Dialog */}
+      <Dialog open={reviseDialogOpen} onOpenChange={setReviseDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <GitBranch size={16} className="text-blue-600" /> Create Revision
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-[12px] text-amber-800">
+              <AlertTriangle
+                size={14}
+                className="shrink-0 mt-0.5 text-amber-600"
+              />
+              <span>
+                This will create a Draft copy of{" "}
+                <strong>{selected?.shortDescription}</strong> for controlled
+                editing. The original Approved record will remain active until
+                the revision is approved.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[12px] font-medium">
+                Reason for Change <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                value={reviseReason}
+                onChange={(e) => setReviseReason(e.target.value)}
+                placeholder="Describe the reason for this change (required for GMP audit trail)..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.revise_reason.textarea"
+              />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              New revision will be:{" "}
+              <span className="font-mono font-semibold">
+                {selected?.identifier}
+              </span>{" "}
+              v{(selected?.versionNumber ?? 1) + 1}
+            </p>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setReviseDialogOpen(false)}
+              data-ocid="data_manager.revise_cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleConfirmRevise}
+              disabled={!reviseReason.trim()}
+              className="gap-1"
+              data-ocid="data_manager.revise_confirm_button"
+            >
+              <GitBranch size={13} /> Create Revision
             </Button>
           </DialogFooter>
         </DialogContent>
