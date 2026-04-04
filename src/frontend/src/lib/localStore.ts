@@ -123,6 +123,16 @@ export const auditStore = makeStore<AuditEvent>(KEYS.auditEvents, "eventId");
 
 // ---- seed defaults ----
 function seed() {
+  // Version-gated re-seed: clears old batch/deviation/workOrder data when
+  // the seed version changes, so new dummy data is always displayed.
+  const SEED_VERSION = "v2-five-batches";
+  if (localStorage.getItem("mes_seed_version") !== SEED_VERSION) {
+    localStorage.removeItem(KEYS.batches);
+    localStorage.removeItem(KEYS.deviations);
+    localStorage.removeItem(KEYS.workOrders);
+    localStorage.setItem("mes_seed_version", SEED_VERSION);
+  }
+
   if (!localStorage.getItem(KEYS.batches)) {
     saveList<BatchRecord>(KEYS.batches, [
       {
@@ -133,74 +143,55 @@ function seed() {
         status: BatchStatus.inProgress,
         currentStage: "Granulation",
         operatorId: anon,
-        startTime: ts(1),
-        notes: "Line 3 — standard batch",
+        startTime: ts(2),
+        notes:
+          "Line 3 — standard production batch. Granulation endpoint reached.",
       },
       {
         batchId: "B-2026-002",
         productName: "Metformin 850mg Tablets",
-        batchSize: 80000,
-        unit: "Tablets",
-        status: BatchStatus.inProgress,
-        currentStage: "Compression",
-        operatorId: anon,
-        startTime: ts(2),
-        notes: "Priority order",
-      },
-      {
-        batchId: "B-2026-003",
-        productName: "Atorvastatin 20mg Tablets",
-        batchSize: 60000,
+        batchSize: 75000,
         unit: "Tablets",
         status: BatchStatus.pending,
         currentStage: "Dispensing",
         operatorId: anon,
         startTime: ts(0),
-        notes: "",
+        notes: "Awaiting raw material release from QC.",
       },
       {
-        batchId: "B-2026-004",
-        productName: "Omeprazole 20mg Capsules",
+        batchId: "B-2026-003",
+        productName: "Omeprazole 20mg Enteric Capsules",
         batchSize: 40000,
         unit: "Capsules",
         status: BatchStatus.onHold,
         currentStage: "Coating",
         operatorId: anon,
-        startTime: ts(3),
-        notes: "QA hold — minor deviation",
+        startTime: ts(5),
+        notes:
+          "QA hold — coating weight gain deviation DEV-2026-001 under investigation.",
       },
       {
-        batchId: "B-2026-005",
-        productName: "Lisinopril 10mg Tablets",
-        batchSize: 100000,
+        batchId: "B-2026-004",
+        productName: "Atorvastatin 40mg Tablets",
+        batchSize: 60000,
         unit: "Tablets",
         status: BatchStatus.completed,
         currentStage: "Packaging",
         operatorId: anon,
-        startTime: ts(5),
-        notes: "Released to warehouse",
+        startTime: ts(10),
+        notes: "Batch released. Final QC approved. Shipped to warehouse.",
       },
       {
-        batchId: "B-2026-006",
-        productName: "Azithromycin 250mg Tablets",
-        batchSize: 30000,
-        unit: "Tablets",
-        status: BatchStatus.inProgress,
-        currentStage: "Blending",
-        operatorId: anon,
-        startTime: ts(1),
-        notes: "",
-      },
-      {
-        batchId: "B-2026-007",
+        batchId: "B-2026-005",
         productName: "Ciprofloxacin 500mg Tablets",
-        batchSize: 45000,
+        batchSize: 35000,
         unit: "Tablets",
         status: BatchStatus.rejected,
         currentStage: "QA Testing",
         operatorId: anon,
-        startTime: ts(7),
-        notes: "Dissolution failure — OOS result",
+        startTime: ts(8),
+        notes:
+          "Dissolution failure — OOS result at Q45min. Batch rejected per SOP-QC-007.",
       },
     ]);
   }
@@ -208,51 +199,50 @@ function seed() {
     saveList<Deviation>(KEYS.deviations, [
       {
         deviationId: "DEV-2026-001",
-        batchRecordId: "B-2026-004",
-        title: "Coating defect — orange peel texture on Omeprazole tablets",
+        batchRecordId: "B-2026-003",
+        title: "Coating weight gain deviation — Omeprazole enteric coating",
         description:
-          "Visual inspection revealed orange peel texture on approximately 8% of coated tablets.",
+          "Coating weight gain measured at 6.2% against specification of 5.0% ± 0.5%. Batch placed on QA hold pending root cause investigation.",
         severity: DeviationSeverity.major,
         deviationStatus: DeviationStatus.underInvestigation,
         reportedBy: anon,
-        reportedDate: ts(3),
+        reportedDate: ts(5),
         capaDescription: "",
       },
       {
         deviationId: "DEV-2026-002",
-        batchRecordId: "B-2026-007",
-        title: "OOS dissolution result — Ciprofloxacin Q6h 45% vs 75% spec",
+        batchRecordId: "B-2026-005",
+        title: "OOS dissolution result — Ciprofloxacin Q45min 45% vs 75% spec",
         description:
-          "Dissolution testing at 60 minutes showed only 45% release against the specification minimum of 75%.",
+          "Dissolution testing at 45 minutes showed only 45% drug release against the specification minimum of 75% (SOP-QC-007). Batch rejected. OOS investigation initiated.",
         severity: DeviationSeverity.critical,
         deviationStatus: DeviationStatus.open,
         reportedBy: anon,
-        reportedDate: ts(7),
+        reportedDate: ts(8),
         capaDescription: "",
       },
       {
         deviationId: "DEV-2026-003",
-        batchRecordId: "B-2026-002",
-        title: "Tablet weight variation — 3 tablets outside ±5% limit",
-        description:
-          "During IPC weight check, 3 out of 20 tablets were found outside the ±5% individual weight variation limit.",
-        severity: DeviationSeverity.minor,
-        deviationStatus: DeviationStatus.closed,
-        reportedBy: anon,
-        reportedDate: ts(10),
-        capaDescription:
-          "Tablet press tooling inspected and worn punches replaced.",
-      },
-      {
-        deviationId: "DEV-2026-004",
         batchRecordId: "B-2026-001",
-        title: "Granulation endpoint moisture content 3.2% vs 2.0% spec",
+        title: "Granulation endpoint moisture content 3.2% vs ≤2.0% spec",
         description:
-          "Loss on drying measurement at granulation endpoint was 3.2% against specification of ≤2.0%.",
+          "Loss on drying at granulation endpoint was 3.2% against specification of ≤2.0%. Additional drying cycle initiated. Batch production paused pending re-test.",
         severity: DeviationSeverity.minor,
         deviationStatus: DeviationStatus.underInvestigation,
         reportedBy: anon,
-        reportedDate: ts(1),
+        reportedDate: ts(2),
+        capaDescription: "",
+      },
+      {
+        deviationId: "DEV-2026-004",
+        batchRecordId: "B-2026-002",
+        title: "Tablet weight variation — 3 tablets outside ±5% limit",
+        description:
+          "During IPC weight check at dispensing stage, 3 out of 20 sampled tablets were outside the ±5% individual weight variation limit. Tooling inspection scheduled.",
+        severity: DeviationSeverity.minor,
+        deviationStatus: DeviationStatus.open,
+        reportedBy: anon,
+        reportedDate: ts(0),
         capaDescription: "",
       },
     ]);
@@ -271,7 +261,8 @@ function seed() {
       {
         workOrderId: "WO-2026-002",
         batchRecordId: "B-2026-002",
-        description: "Tablet press changeover from 7mm to 12mm tooling",
+        description:
+          "Tablet press changeover from 7mm to 12mm tooling for Metformin batch",
         priority: "High",
         status: WorkOrderStatus.open,
         assignedTo: anon,
@@ -280,38 +271,32 @@ function seed() {
       {
         workOrderId: "WO-2026-003",
         batchRecordId: "B-2026-003",
-        description: "Raw material dispensing for Atorvastatin batch",
+        description:
+          "Coating pan inspection and weight gain deviation investigation for Omeprazole batch",
         priority: "High",
-        status: WorkOrderStatus.open,
-        assignedTo: anon,
-        scheduledStart: ts(-1),
-      },
-      {
-        workOrderId: "WO-2026-004",
-        batchRecordId: "B-2026-004",
-        description: "Coating pan inspection and deviation investigation",
-        priority: "Medium",
         status: WorkOrderStatus.inProgress,
         assignedTo: anon,
         scheduledStart: ts(0),
       },
       {
-        workOrderId: "WO-2026-005",
-        batchRecordId: "B-2026-005",
-        description: "Final QC release testing for Lisinopril batch",
+        workOrderId: "WO-2026-004",
+        batchRecordId: "B-2026-004",
+        description:
+          "Final QC release testing and documentation for Atorvastatin batch",
         priority: "Medium",
         status: WorkOrderStatus.completed,
         assignedTo: anon,
-        scheduledStart: ts(4),
+        scheduledStart: ts(9),
       },
       {
-        workOrderId: "WO-2026-006",
-        batchRecordId: "B-2026-006",
-        description: "Preventive maintenance — V-blender bearings",
-        priority: "Low",
+        workOrderId: "WO-2026-005",
+        batchRecordId: "B-2026-005",
+        description:
+          "OOS investigation — dissolution failure root cause analysis for Ciprofloxacin batch",
+        priority: "Critical",
         status: WorkOrderStatus.open,
         assignedTo: anon,
-        scheduledStart: ts(-2),
+        scheduledStart: ts(8),
       },
     ]);
   }
@@ -555,46 +540,50 @@ function seed() {
         action: "CREATE",
         userId: anon,
         entityId: "B-2026-001",
-        timestamp: ts(1),
+        timestamp: ts(2),
         details:
-          "Batch record B-2026-001 created for Amoxicillin 500mg Capsules",
+          "Batch record B-2026-001 created for Amoxicillin 500mg Capsules — Line 3",
         entityType: EntityType.batchRecord,
       },
       {
         eventId: "AE-002",
         action: "STATUS_UPDATE",
         userId: anon,
-        entityId: "B-2026-001",
-        timestamp: ts(1),
-        details: "Status changed from Pending to In Progress",
+        entityId: "B-2026-003",
+        timestamp: ts(5),
+        details:
+          "Batch B-2026-003 (Omeprazole) status changed to On Hold — QA hold for DEV-2026-001",
         entityType: EntityType.batchRecord,
       },
       {
         eventId: "AE-003",
         action: "CREATE",
         userId: anon,
-        entityId: "DEV-2026-004",
-        timestamp: ts(1),
-        details: "Deviation reported for B-2026-001: Granulation moisture OOS",
+        entityId: "DEV-2026-002",
+        timestamp: ts(8),
+        details:
+          "Deviation DEV-2026-002 reported for B-2026-005: Ciprofloxacin dissolution OOS at Q45min",
         entityType: EntityType.deviation,
       },
       {
         eventId: "AE-004",
         action: "CREATE",
         userId: anon,
-        entityId: "WO-2026-001",
-        timestamp: ts(0),
-        details: "Work order WO-2026-001 created for granulator cleaning",
+        entityId: "WO-2026-005",
+        timestamp: ts(8),
+        details:
+          "Work order WO-2026-005 created — OOS investigation for Ciprofloxacin batch B-2026-005",
         entityType: EntityType.workOrder,
       },
       {
         eventId: "AE-005",
         action: "STATUS_UPDATE",
         userId: anon,
-        entityId: "EQ-003",
-        timestamp: ts(3),
-        details: "Equipment EQ-003 status changed to Maintenance",
-        entityType: EntityType.equipment,
+        entityId: "B-2026-004",
+        timestamp: ts(10),
+        details:
+          "Batch B-2026-004 (Atorvastatin 40mg) status changed to Completed — final QC approved, shipped to warehouse",
+        entityType: EntityType.batchRecord,
       },
     ]);
   }

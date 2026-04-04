@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  CheckCircle2,
   ChevronDown,
   Clock,
   Database,
@@ -44,17 +45,46 @@ import {
   FileDown,
   GitBranch,
   HelpCircle,
-  History,
+  Lock,
   Plus,
   Save,
   Search,
+  Shield,
   Trash2,
+  XCircle,
 } from "lucide-react";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ReportDialog } from "../components/ReportDialog";
 import { helpContent } from "../data/helpContent";
+import {
+  type CleaningLevel,
+  type CleaningLogEntry,
+  type CleaningRule,
+  type ComparisonType,
+  type GmpStatus,
+  type HealthStatus,
+  type MaintenanceStatus,
+  type ValidationResult,
+  computeCleaningStatus,
+  computeEquipmentIndicator,
+  computePmStatus,
+  validateExecution,
+} from "../lib/gmpValidation";
+
+const _PRODUCTS = [
+  "Amoxicillin 250mg",
+  "Amoxicillin 500mg",
+  "Ibuprofen 200mg",
+  "Metformin 500mg",
+  "Metformin 850mg",
+  "Omeprazole 20mg",
+  "Atorvastatin 10mg",
+  "Atorvastatin 40mg",
+  "Ciprofloxacin 500mg",
+  "Paracetamol 500mg",
+];
 
 type EntityType =
   | "WorkCenter"
@@ -99,6 +129,20 @@ interface EquipmentNode {
   historianServer: string;
   createdAt: string;
   changeHistory: ChangeEntry[];
+  // GMP fields
+  status?: GmpStatus;
+  maintenance_status?: MaintenanceStatus;
+  health_status?: HealthStatus;
+  last_maintenance_date?: string;
+  pm_due_date?: string;
+  cleaningRules?: CleaningRule[];
+  cleaningLog?: CleaningLogEntry | null;
+  // PropertyType capability fields
+  min_value?: string;
+  max_value?: string;
+  required_min?: string;
+  required_max?: string;
+  comparison_type?: ComparisonType | "";
 }
 
 const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
@@ -175,6 +219,7 @@ const INITIAL_DATA: EquipmentNode[] = [
         changedBy: "Dr. Sarah Chen",
       },
     ],
+    status: "Approved",
   },
   {
     id: "wc2",
@@ -202,6 +247,7 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-10T08:30:00Z",
     changeHistory: [],
+    status: "Draft",
   },
   {
     id: "sta1",
@@ -229,6 +275,7 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-11T09:00:00Z",
     changeHistory: [],
+    status: "Approved",
   },
   {
     id: "sta2",
@@ -256,6 +303,7 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-11T09:15:00Z",
     changeHistory: [],
+    status: "Draft",
   },
   {
     id: "sta3",
@@ -283,6 +331,7 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-11T09:30:00Z",
     changeHistory: [],
+    status: "Approved",
   },
   {
     id: "sta4",
@@ -310,6 +359,7 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-11T10:00:00Z",
     changeHistory: [],
+    status: "Approved",
   },
   {
     id: "ec1",
@@ -337,6 +387,12 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-05T07:00:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Active",
+    health_status: "Good",
+    pm_due_date: "2026-06-01",
+    cleaningRules: [],
+    cleaningLog: null,
   },
   {
     id: "ec2",
@@ -364,7 +420,14 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-05T07:30:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Active",
+    health_status: "Good",
+    pm_due_date: "2026-07-15",
+    cleaningRules: [],
+    cleaningLog: null,
   },
+  // ee1: Approved, Active, Good, PM On Time — all green
   {
     id: "ee1",
     identifier: "EE-COAT-S",
@@ -391,7 +454,19 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-12T08:00:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Active",
+    health_status: "Good",
+    last_maintenance_date: "2025-12-01",
+    pm_due_date: "2026-06-01",
+    cleaningRules: [],
+    cleaningLog: {
+      lastProduct: "Amoxicillin 250mg",
+      lastCleanedDate: "2026-03-20",
+      cleaningLevel: "Major",
+    },
   },
+  // ee2: Draft, Active, Good, PM Due Soon — yellow
   {
     id: "ee2",
     identifier: "EE-COAT-M",
@@ -418,7 +493,15 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-12T08:15:00Z",
     changeHistory: [],
+    status: "Draft",
+    maintenance_status: "Active",
+    health_status: "Good",
+    last_maintenance_date: "2025-11-15",
+    pm_due_date: "2026-04-09",
+    cleaningRules: [],
+    cleaningLog: null,
   },
+  // ee3: Approved, Under Maintenance, Bad, PM Overdue — red
   {
     id: "ee3",
     identifier: "EE-COAT-N",
@@ -445,7 +528,15 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-12T08:30:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Under Maintenance",
+    health_status: "Bad",
+    last_maintenance_date: "2025-09-10",
+    pm_due_date: "2026-03-15",
+    cleaningRules: [],
+    cleaningLog: null,
   },
+  // ee4: Approved, Active, Good, PM OK, cleaning Required — red
   {
     id: "ee4",
     identifier: "EE-COAT-AT",
@@ -472,7 +563,32 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-12T09:00:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Active",
+    health_status: "Good",
+    last_maintenance_date: "2026-01-20",
+    pm_due_date: "2026-07-20",
+    cleaningRules: [
+      {
+        id: "cr1",
+        previousProduct: "Amoxicillin 500mg",
+        nextProduct: "Metformin 500mg",
+        requiredCleaningLevel: "Major",
+      },
+      {
+        id: "cr2",
+        previousProduct: "Ciprofloxacin 500mg",
+        nextProduct: "Paracetamol 500mg",
+        requiredCleaningLevel: "Minor",
+      },
+    ],
+    cleaningLog: {
+      lastProduct: "Amoxicillin 500mg",
+      lastCleanedDate: "2026-03-28",
+      cleaningLevel: "Minor",
+    },
   },
+  // ee5: Draft, Active, Good, PM OK, cleaning OK — green
   {
     id: "ee5",
     identifier: "EE-COAT-AM",
@@ -499,7 +615,19 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-12T09:15:00Z",
     changeHistory: [],
+    status: "Draft",
+    maintenance_status: "Active",
+    health_status: "Good",
+    last_maintenance_date: "2026-02-10",
+    pm_due_date: "2026-08-10",
+    cleaningRules: [],
+    cleaningLog: {
+      lastProduct: "Paracetamol 500mg",
+      lastCleanedDate: "2026-03-30",
+      cleaningLevel: "Major",
+    },
   },
+  // ee6: Approved, Active, Bad, PM Overdue — red
   {
     id: "ee6",
     identifier: "EE-COAT-AK",
@@ -526,6 +654,13 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-12T09:30:00Z",
     changeHistory: [],
+    status: "Approved",
+    maintenance_status: "Active",
+    health_status: "Bad",
+    last_maintenance_date: "2025-08-01",
+    pm_due_date: "2026-02-28",
+    cleaningRules: [],
+    cleaningLog: null,
   },
   {
     id: "pt1",
@@ -553,6 +688,12 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-08T10:00:00Z",
     changeHistory: [],
+    status: "Approved",
+    min_value: "",
+    max_value: "",
+    required_min: "",
+    required_max: "",
+    comparison_type: "",
   },
   {
     id: "pt2",
@@ -580,6 +721,12 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-08T10:15:00Z",
     changeHistory: [],
+    status: "Approved",
+    min_value: "",
+    max_value: "",
+    required_min: "",
+    required_max: "",
+    comparison_type: "",
   },
   {
     id: "pt3",
@@ -607,6 +754,12 @@ const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "",
     createdAt: "2024-01-08T10:30:00Z",
     changeHistory: [],
+    status: "Draft",
+    min_value: "10",
+    max_value: "200",
+    required_min: "50",
+    required_max: "150",
+    comparison_type: "WITHIN_RANGE",
   },
 ];
 
@@ -633,6 +786,18 @@ const EMPTY_NODE: Omit<EquipmentNode, "id" | "createdAt" | "changeHistory"> = {
   historianAccessServer: "",
   historianServerDefault: "PIServer1",
   historianServer: "",
+  status: "Draft",
+  maintenance_status: "Active",
+  health_status: "Good",
+  last_maintenance_date: "",
+  pm_due_date: "",
+  cleaningRules: [],
+  cleaningLog: null,
+  min_value: "",
+  max_value: "",
+  required_min: "",
+  required_max: "",
+  comparison_type: "",
 };
 
 class DetailErrorBoundary extends React.Component<
@@ -646,9 +811,7 @@ class DetailErrorBoundary extends React.Component<
   static getDerivedStateFromError() {
     return { hasError: true };
   }
-  componentDidCatch() {
-    // error boundary — reset is handled via key prop change
-  }
+  componentDidCatch() {}
   render() {
     if (this.state.hasError) {
       return (
@@ -664,10 +827,7 @@ class DetailErrorBoundary extends React.Component<
 function FieldRow({
   label,
   children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+}: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[160px_1fr] items-start gap-2 py-1.5">
       <Label className="text-[11.5px] font-medium text-muted-foreground pt-2 leading-tight">
@@ -689,6 +849,19 @@ function SectionHeader({ title }: { title: string }) {
   );
 }
 
+function GmpIndicatorDot({ color }: { color: "green" | "yellow" | "red" }) {
+  const cls = {
+    green: "bg-green-500",
+    yellow: "bg-amber-400",
+    red: "bg-red-500",
+  }[color];
+  return (
+    <span
+      className={cn("inline-block w-2.5 h-2.5 rounded-full shrink-0", cls)}
+    />
+  );
+}
+
 export default function DataManager() {
   const navigate = useNavigate();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -706,6 +879,10 @@ export default function DataManager() {
     EntityType | "all"
   >("all");
   const [isLoading, setIsLoading] = useState(false);
+  const [validateDialogOpen, setValidateDialogOpen] = useState(false);
+  const [validateResult, setValidateResult] = useState<ValidationResult | null>(
+    null,
+  );
 
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -748,21 +925,35 @@ export default function DataManager() {
 
   const handleEdit = () => {
     if (!selected) return;
+    if (selected.status === "Approved") {
+      toast.error("Approved records are read-only. Cannot edit.");
+      return;
+    }
     setDraft({ ...selected });
     setEditMode(true);
   };
 
   const handleSave = () => {
     if (!draft) return;
+    if (draft.status === "Approved") {
+      toast.error("Approved records cannot be edited.");
+      return;
+    }
     const now = new Date().toISOString();
     const prev = nodes.find((n) => n.id === draft.id);
     const changes: ChangeEntry[] = [];
     if (prev) {
       const fields = Object.keys(draft) as (keyof EquipmentNode)[];
       for (const f of fields) {
-        if (f === "changeHistory" || f === "createdAt") continue;
-        const oldVal = String(prev[f]);
-        const newVal = String(draft[f]);
+        if (
+          f === "changeHistory" ||
+          f === "createdAt" ||
+          f === "cleaningRules" ||
+          f === "cleaningLog"
+        )
+          continue;
+        const oldVal = String(prev[f] ?? "");
+        const newVal = String(draft[f] ?? "");
         if (oldVal !== newVal) {
           changes.push({
             timestamp: now,
@@ -777,10 +968,7 @@ export default function DataManager() {
     setNodes((prev) =>
       prev.map((n) =>
         n.id === draft.id
-          ? {
-              ...draft,
-              changeHistory: [...draft.changeHistory, ...changes],
-            }
+          ? { ...draft, changeHistory: [...draft.changeHistory, ...changes] }
           : n,
       ),
     );
@@ -789,8 +977,40 @@ export default function DataManager() {
     toast.success("Changes saved successfully");
   };
 
+  const handleApprove = () => {
+    if (!selected) return;
+    const now = new Date().toISOString();
+    setNodes((prev) =>
+      prev.map((n) =>
+        n.id === selected.id
+          ? {
+              ...n,
+              status: "Approved" as GmpStatus,
+              changeHistory: [
+                ...n.changeHistory,
+                {
+                  timestamp: now,
+                  field: "status",
+                  oldValue: "Draft",
+                  newValue: "Approved",
+                  changedBy: "Dr. Sarah Chen",
+                  action: "Update" as const,
+                  reason: "GMP Status Approval",
+                },
+              ],
+            }
+          : n,
+      ),
+    );
+    toast.success("Record approved successfully");
+  };
+
   const handleDelete = () => {
     if (!selected) return;
+    if (selected.status === "Approved") {
+      toast.error("Approved records cannot be deleted (GMP compliance).");
+      return;
+    }
     if (!confirm(`Delete "${selected.shortDescription}"?`)) return;
     setNodes((prev) => prev.filter((n) => n.id !== selected.id));
     setSelectedId(null);
@@ -821,6 +1041,27 @@ export default function DataManager() {
     setTimeout(() => setIsLoading(false), 300);
   };
 
+  const handleValidate = () => {
+    if (!selected) return;
+    const result = validateExecution({
+      equipment:
+        selected.entityType === "EquipmentEntity" ||
+        selected.entityType === "EquipmentClass"
+          ? {
+              status: selected.status ?? "Draft",
+              maintenance_status: selected.maintenance_status ?? "Active",
+              health_status: selected.health_status ?? "Good",
+              pm_due_date: selected.pm_due_date ?? "",
+              cleaningLog: selected.cleaningLog ?? null,
+              cleaningRules: selected.cleaningRules ?? [],
+            }
+          : null,
+      equipmentId: selected.identifier,
+    });
+    setValidateResult(result);
+    setValidateDialogOpen(true);
+  };
+
   const currentNode = selectedId
     ? editMode && draft
       ? draft
@@ -838,6 +1079,9 @@ export default function DataManager() {
         .filter(Boolean)
         .join(" / ")
     : "";
+
+  const isEquipmentNode = (n: EquipmentNode) =>
+    n.entityType === "EquipmentEntity" || n.entityType === "EquipmentClass";
 
   return (
     <div className="flex flex-col flex-1 min-h-0 -m-6">
@@ -884,9 +1128,7 @@ export default function DataManager() {
                   className="h-7 gap-1 text-[12px] px-3"
                   data-ocid="data_manager.new_button"
                 >
-                  <Plus size={13} />
-                  New
-                  <ChevronDown size={11} />
+                  <Plus size={13} /> New <ChevronDown size={11} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="text-[13px]">
@@ -914,8 +1156,7 @@ export default function DataManager() {
               disabled={!selected}
               data-ocid="data_manager.save_button"
             >
-              <Save size={13} />
-              {editMode ? "Save" : "Edit"}
+              <Save size={13} /> {editMode ? "Save" : "Edit"}
             </Button>
 
             <Button
@@ -926,8 +1167,7 @@ export default function DataManager() {
               disabled={!selected}
               data-ocid="data_manager.delete_button"
             >
-              <Trash2 size={13} />
-              Delete
+              <Trash2 size={13} /> Delete
             </Button>
 
             <Button
@@ -937,8 +1177,7 @@ export default function DataManager() {
               onClick={() => setReportOpen(true)}
               data-ocid="data_manager.export_report_button"
             >
-              <FileDown size={13} />
-              Export Report
+              <FileDown size={13} /> Export Report
             </Button>
 
             <div className="flex-1" />
@@ -1031,6 +1270,25 @@ export default function DataManager() {
                 {filtered.map((node, idx) => {
                   const colors = ENTITY_COLORS[node.entityType];
                   const isSelected = selectedId === node.id;
+                  const showGmp = isEquipmentNode(node);
+                  const pmStatus = showGmp
+                    ? computePmStatus(node.pm_due_date ?? "")
+                    : null;
+                  const cleaningStatus = showGmp
+                    ? computeCleaningStatus(
+                        node.cleaningLog ?? null,
+                        node.cleaningRules ?? [],
+                      )
+                    : null;
+                  const indicator = showGmp
+                    ? computeEquipmentIndicator(
+                        node.maintenance_status ?? "Active",
+                        node.health_status ?? "Good",
+                        pmStatus!,
+                        cleaningStatus!,
+                      )
+                    : null;
+
                   return (
                     <button
                       key={node.id}
@@ -1050,14 +1308,19 @@ export default function DataManager() {
                         <span className="text-[12.5px] font-semibold text-foreground leading-tight">
                           {node.shortDescription}
                         </span>
-                        <span
-                          className={cn(
-                            "text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0",
-                            colors.badge,
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {showGmp && indicator && (
+                            <GmpIndicatorDot color={indicator} />
                           )}
-                        >
-                          {ENTITY_TYPE_LABELS[node.entityType]}
-                        </span>
+                          <span
+                            className={cn(
+                              "text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap",
+                              colors.badge,
+                            )}
+                          >
+                            {ENTITY_TYPE_LABELS[node.entityType]}
+                          </span>
+                        </div>
                       </div>
                       <p className="text-[11px] text-muted-foreground font-mono">
                         {node.identifier}
@@ -1066,6 +1329,68 @@ export default function DataManager() {
                         <p className="text-[10.5px] text-muted-foreground mt-1">
                           ↳ {getParentLabel(node.parentId)}
                         </p>
+                      )}
+                      {showGmp && (
+                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          {/* PM Status */}
+                          <span
+                            className={cn(
+                              "text-[9px] font-semibold px-1.5 py-0.5 rounded-full border",
+                              {
+                                "bg-green-50 text-green-700 border-green-200":
+                                  pmStatus === "On Time",
+                                "bg-amber-50 text-amber-700 border-amber-200":
+                                  pmStatus === "Due Soon",
+                                "bg-red-50 text-red-700 border-red-200":
+                                  pmStatus === "Overdue",
+                              },
+                            )}
+                          >
+                            PM: {pmStatus}
+                          </span>
+                          {/* Health Status */}
+                          <span
+                            className={cn(
+                              "text-[9px] font-semibold px-1.5 py-0.5 rounded-full border",
+                              {
+                                "bg-green-50 text-green-700 border-green-200":
+                                  node.health_status === "Good",
+                                "bg-red-50 text-red-700 border-red-200":
+                                  node.health_status === "Bad",
+                              },
+                            )}
+                          >
+                            {node.health_status ?? "Good"}
+                          </span>
+                          {/* Cleaning Status */}
+                          <span
+                            className={cn(
+                              "text-[9px] font-semibold px-1.5 py-0.5 rounded-full border",
+                              {
+                                "bg-green-50 text-green-700 border-green-200":
+                                  cleaningStatus === "OK",
+                                "bg-red-50 text-red-700 border-red-200":
+                                  cleaningStatus === "Required",
+                              },
+                            )}
+                          >
+                            Clean: {cleaningStatus}
+                          </span>
+                          {/* GMP Status */}
+                          <span
+                            className={cn(
+                              "text-[9px] font-semibold px-1.5 py-0.5 rounded-full border",
+                              {
+                                "bg-green-50 text-green-700 border-green-200":
+                                  node.status === "Approved",
+                                "bg-amber-50 text-amber-700 border-amber-200":
+                                  node.status === "Draft" || !node.status,
+                              },
+                            )}
+                          >
+                            {node.status ?? "Draft"}
+                          </span>
+                        </div>
                       )}
                     </button>
                   );
@@ -1089,11 +1414,11 @@ export default function DataManager() {
         </div>
 
         {/* RIGHT PANE */}
-        <div className="flex flex-col w-[400px] shrink-0 bg-white min-h-0 overflow-y-auto">
+        <div className="flex flex-col w-[420px] shrink-0 bg-white min-h-0 overflow-y-auto">
           {currentNode ? (
             <>
               {/* Detail header */}
-              <div className="flex items-center justify-between px-5 py-3 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0">
+              <div className="flex items-start justify-between px-5 py-3 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0">
                 <div>
                   <p className="text-[13px] font-semibold text-foreground">
                     {currentNode.shortDescription}
@@ -1101,8 +1426,32 @@ export default function DataManager() {
                   <p className="text-[11px] text-muted-foreground font-mono">
                     {currentNode.identifier}
                   </p>
+                  {/* GMP Status badge */}
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span
+                      className={cn(
+                        "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
+                        {
+                          "bg-green-50 text-green-700 border-green-200":
+                            currentNode.status === "Approved",
+                          "bg-amber-50 text-amber-700 border-amber-200":
+                            currentNode.status === "Draft" ||
+                            !currentNode.status,
+                        },
+                      )}
+                    >
+                      {currentNode.status === "Approved"
+                        ? "✓ Approved"
+                        : "Draft"}
+                    </span>
+                    {currentNode.status === "Approved" && (
+                      <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                        <Lock size={10} /> Read-only
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-1.5 justify-end ml-2">
                   {editMode ? (
                     <>
                       <Button
@@ -1127,28 +1476,68 @@ export default function DataManager() {
                       </Button>
                     </>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1 text-[12px] px-3"
-                      onClick={handleEdit}
-                      data-ocid="data_manager.edit_button"
-                    >
-                      <Edit2 size={12} /> Edit
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className={cn(
+                          "h-7 gap-1 text-[12px] px-3",
+                          currentNode.status === "Approved" &&
+                            "opacity-50 cursor-not-allowed",
+                        )}
+                        onClick={handleEdit}
+                        disabled={currentNode.status === "Approved"}
+                        title={
+                          currentNode.status === "Approved"
+                            ? "Approved records are read-only"
+                            : "Edit record"
+                        }
+                        data-ocid="data_manager.edit_button"
+                      >
+                        {currentNode.status === "Approved" ? (
+                          <Lock size={12} />
+                        ) : (
+                          <Edit2 size={12} />
+                        )}{" "}
+                        Edit
+                      </Button>
+                      {(currentNode.status === "Draft" ||
+                        !currentNode.status) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-green-700 border-green-300 hover:bg-green-50"
+                          onClick={handleApprove}
+                          data-ocid="data_manager.approve_button"
+                        >
+                          <Shield size={12} /> Approve
+                        </Button>
+                      )}
+                      {isEquipmentNode(currentNode) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3"
+                          onClick={handleValidate}
+                          data-ocid="data_manager.validate_button"
+                        >
+                          <CheckCircle2 size={12} /> Validate
+                        </Button>
+                      )}
+                      {(currentNode.entityType === "EquipmentEntity" ||
+                        currentNode.entityType === "EquipmentClass") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3"
+                          onClick={() => navigate({ to: "/workflow-designer" })}
+                          data-ocid="data_manager.workflow_designer.button"
+                        >
+                          <GitBranch size={12} /> Workflow
+                        </Button>
+                      )}
+                    </>
                   )}
-                  {currentNode.entityType === "EquipmentEntity" ||
-                  currentNode.entityType === "EquipmentClass" ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1 text-[12px] px-3"
-                      onClick={() => navigate({ to: "/workflow-designer" })}
-                      data-ocid="data_manager.workflow_designer.button"
-                    >
-                      <GitBranch size={12} /> Edit Workflow
-                    </Button>
-                  ) : null}
                 </div>
               </div>
 
@@ -1187,6 +1576,15 @@ export default function DataManager() {
                       >
                         Engineering
                       </TabsTrigger>
+                      {isEquipmentNode(currentNode) && (
+                        <TabsTrigger
+                          value="cleaning"
+                          className="h-6 px-3 text-[11.5px]"
+                          data-ocid="data_manager.cleaning.tab"
+                        >
+                          Cleaning
+                        </TabsTrigger>
+                      )}
                       <TabsTrigger
                         value="logbook"
                         className="h-6 px-3 text-[11.5px]"
@@ -1551,6 +1949,138 @@ export default function DataManager() {
                         className="h-7 text-[12px] bg-muted/50"
                       />
                     </FieldRow>
+
+                    {currentNode.entityType === "PropertyType" && (
+                      <>
+                        <SectionHeader title="Range & Capability" />
+                        <FieldRow label="Min Value">
+                          <Input
+                            disabled={!editMode}
+                            value={
+                              editMode
+                                ? (draft?.min_value ?? "")
+                                : (currentNode.min_value ?? "")
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) => d && { ...d, min_value: e.target.value },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                            placeholder="e.g. 10"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Max Value">
+                          <Input
+                            disabled={!editMode}
+                            value={
+                              editMode
+                                ? (draft?.max_value ?? "")
+                                : (currentNode.max_value ?? "")
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) => d && { ...d, max_value: e.target.value },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                            placeholder="e.g. 200"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Required Min">
+                          <Input
+                            disabled={!editMode}
+                            value={
+                              editMode
+                                ? (draft?.required_min ?? "")
+                                : (currentNode.required_min ?? "")
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) =>
+                                  d && { ...d, required_min: e.target.value },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                            placeholder="e.g. 50"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Required Max">
+                          <Input
+                            disabled={!editMode}
+                            value={
+                              editMode
+                                ? (draft?.required_max ?? "")
+                                : (currentNode.required_max ?? "")
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) =>
+                                  d && { ...d, required_max: e.target.value },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                            placeholder="e.g. 150"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Comparison Type">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.comparison_type
+                                : currentNode.comparison_type) || "none"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    comparison_type:
+                                      v === "none" ? "" : (v as ComparisonType),
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none" className="text-[12px]">
+                                — Not Set —
+                              </SelectItem>
+                              <SelectItem
+                                value="WITHIN_RANGE"
+                                className="text-[12px]"
+                              >
+                                WITHIN_RANGE
+                              </SelectItem>
+                              <SelectItem
+                                value="COVER_RANGE"
+                                className="text-[12px]"
+                              >
+                                COVER_RANGE
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        <div className="mt-3 p-3 rounded-lg bg-muted/40 border border-border text-[11px] text-muted-foreground">
+                          <p className="font-semibold mb-1">
+                            Comparison Logic:
+                          </p>
+                          <p>
+                            <strong>WITHIN_RANGE:</strong> Value must be inside
+                            the required range (required_min ≤ value ≤
+                            required_max).
+                          </p>
+                          <p className="mt-1">
+                            <strong>COVER_RANGE:</strong> Equipment range must
+                            fully cover the required range (min ≤ required_min
+                            AND max ≥ required_max).
+                          </p>
+                        </div>
+                      </>
+                    )}
                   </TabsContent>
 
                   {/* PROCESS TAB */}
@@ -1703,7 +2233,506 @@ export default function DataManager() {
                         className="h-7 text-[12px] bg-muted/50"
                       />
                     </FieldRow>
+
+                    {isEquipmentNode(currentNode) && (
+                      <>
+                        <SectionHeader title="Maintenance & PM" />
+                        <FieldRow label="Maintenance Status">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.maintenance_status
+                                : currentNode.maintenance_status) ?? "Active"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    maintenance_status: v as MaintenanceStatus,
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem
+                                value="Active"
+                                className="text-[12px]"
+                              >
+                                Active
+                              </SelectItem>
+                              <SelectItem
+                                value="Under Maintenance"
+                                className="text-[12px]"
+                              >
+                                Under Maintenance
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        <FieldRow label="Health Status">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.health_status
+                                : currentNode.health_status) ?? "Good"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    health_status: v as HealthStatus,
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="Good" className="text-[12px]">
+                                Good
+                              </SelectItem>
+                              <SelectItem value="Bad" className="text-[12px]">
+                                Bad
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        <FieldRow label="Last Maintenance">
+                          <Input
+                            type="date"
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.last_maintenance_date
+                                : currentNode.last_maintenance_date) ?? ""
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    last_maintenance_date: e.target.value,
+                                  },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                          />
+                        </FieldRow>
+                        <FieldRow label="PM Due Date">
+                          <Input
+                            type="date"
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.pm_due_date
+                                : currentNode.pm_due_date) ?? ""
+                            }
+                            onChange={(e) =>
+                              setDraft(
+                                (d) =>
+                                  d && { ...d, pm_due_date: e.target.value },
+                              )
+                            }
+                            className="h-7 text-[12px]"
+                          />
+                        </FieldRow>
+                        <FieldRow label="PM Status">
+                          {(() => {
+                            const pmS = computePmStatus(
+                              (editMode
+                                ? draft?.pm_due_date
+                                : currentNode.pm_due_date) ?? "",
+                            );
+                            return (
+                              <div
+                                className={cn(
+                                  "h-7 flex items-center px-2 rounded text-[12px] font-semibold border",
+                                  {
+                                    "bg-green-50 text-green-700 border-green-200":
+                                      pmS === "On Time",
+                                    "bg-amber-50 text-amber-700 border-amber-200":
+                                      pmS === "Due Soon",
+                                    "bg-red-50 text-red-700 border-red-200":
+                                      pmS === "Overdue",
+                                  },
+                                )}
+                              >
+                                {pmS}
+                              </div>
+                            );
+                          })()}
+                        </FieldRow>
+                      </>
+                    )}
                   </TabsContent>
+
+                  {/* CLEANING TAB */}
+                  {isEquipmentNode(currentNode) && (
+                    <TabsContent
+                      value="cleaning"
+                      className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
+                    >
+                      <SectionHeader title="Cleaning Status" />
+                      {(() => {
+                        const cs = computeCleaningStatus(
+                          (editMode
+                            ? draft?.cleaningLog
+                            : currentNode.cleaningLog) ?? null,
+                          (editMode
+                            ? draft?.cleaningRules
+                            : currentNode.cleaningRules) ?? [],
+                        );
+                        return (
+                          <div
+                            className={cn(
+                              "flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-semibold mb-4",
+                              {
+                                "bg-green-50 text-green-700 border-green-200":
+                                  cs === "OK",
+                                "bg-red-50 text-red-700 border-red-200":
+                                  cs === "Required",
+                              },
+                            )}
+                          >
+                            {cs === "OK" ? (
+                              <CheckCircle2 size={14} />
+                            ) : (
+                              <XCircle size={14} />
+                            )}
+                            Cleaning Status: {cs}
+                            {cs === "Required" && (
+                              <span className="font-normal text-[11px] ml-1">
+                                — Equipment must be cleaned before next use
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <SectionHeader title="Cleaning Log" />
+                      <FieldRow label="Last Product">
+                        <Input
+                          disabled={!editMode}
+                          value={
+                            (editMode
+                              ? draft?.cleaningLog?.lastProduct
+                              : currentNode.cleaningLog?.lastProduct) ?? ""
+                          }
+                          onChange={(e) =>
+                            setDraft(
+                              (d) =>
+                                d && {
+                                  ...d,
+                                  cleaningLog: {
+                                    ...(d.cleaningLog ?? {
+                                      lastCleanedDate: "",
+                                      cleaningLevel: "None" as CleaningLevel,
+                                    }),
+                                    lastProduct: e.target.value,
+                                  },
+                                },
+                            )
+                          }
+                          className="h-7 text-[12px]"
+                          placeholder="e.g. Amoxicillin 500mg"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Last Cleaned Date">
+                        <Input
+                          type="date"
+                          disabled={!editMode}
+                          value={
+                            (editMode
+                              ? draft?.cleaningLog?.lastCleanedDate
+                              : currentNode.cleaningLog?.lastCleanedDate) ?? ""
+                          }
+                          onChange={(e) =>
+                            setDraft(
+                              (d) =>
+                                d && {
+                                  ...d,
+                                  cleaningLog: {
+                                    ...(d.cleaningLog ?? {
+                                      lastProduct: "",
+                                      cleaningLevel: "None" as CleaningLevel,
+                                    }),
+                                    lastCleanedDate: e.target.value,
+                                  },
+                                },
+                            )
+                          }
+                          className="h-7 text-[12px]"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Cleaning Level">
+                        <Select
+                          disabled={!editMode}
+                          value={
+                            (editMode
+                              ? draft?.cleaningLog?.cleaningLevel
+                              : currentNode.cleaningLog?.cleaningLevel) ??
+                            "None"
+                          }
+                          onValueChange={(v) =>
+                            setDraft(
+                              (d) =>
+                                d && {
+                                  ...d,
+                                  cleaningLog: {
+                                    ...(d.cleaningLog ?? {
+                                      lastProduct: "",
+                                      lastCleanedDate: "",
+                                    }),
+                                    cleaningLevel: v as CleaningLevel,
+                                  },
+                                },
+                            )
+                          }
+                        >
+                          <SelectTrigger className="h-7 text-[12px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="None" className="text-[12px]">
+                              None
+                            </SelectItem>
+                            <SelectItem value="Minor" className="text-[12px]">
+                              Minor
+                            </SelectItem>
+                            <SelectItem value="Major" className="text-[12px]">
+                              Major
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FieldRow>
+
+                      <SectionHeader title="Cleaning Rules" />
+                      {(
+                        (editMode
+                          ? draft?.cleaningRules
+                          : currentNode.cleaningRules) ?? []
+                      ).length === 0 ? (
+                        <p className="text-[11.5px] text-muted-foreground py-2">
+                          No cleaning rules defined.
+                        </p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="text-[11px] h-7">
+                                Previous Product
+                              </TableHead>
+                              <TableHead className="text-[11px] h-7">
+                                Next Product
+                              </TableHead>
+                              <TableHead className="text-[11px] h-7">
+                                Required Level
+                              </TableHead>
+                              {editMode && (
+                                <TableHead className="text-[11px] h-7 w-8" />
+                              )}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(
+                              (editMode
+                                ? draft?.cleaningRules
+                                : currentNode.cleaningRules) ?? []
+                            ).map((rule, ridx) => (
+                              <TableRow
+                                key={rule.id}
+                                data-ocid={`data_manager.cleaning_rule.${ridx + 1}`}
+                              >
+                                <TableCell className="py-1 text-[11px]">
+                                  {editMode ? (
+                                    <Input
+                                      value={rule.previousProduct}
+                                      onChange={(e) =>
+                                        setDraft(
+                                          (d) =>
+                                            d && {
+                                              ...d,
+                                              cleaningRules: (
+                                                d.cleaningRules ?? []
+                                              ).map((r, i) =>
+                                                i === ridx
+                                                  ? {
+                                                      ...r,
+                                                      previousProduct:
+                                                        e.target.value,
+                                                    }
+                                                  : r,
+                                              ),
+                                            },
+                                        )
+                                      }
+                                      className="h-6 text-[11px] px-1.5"
+                                    />
+                                  ) : (
+                                    rule.previousProduct
+                                  )}
+                                </TableCell>
+                                <TableCell className="py-1 text-[11px]">
+                                  {editMode ? (
+                                    <Input
+                                      value={rule.nextProduct}
+                                      onChange={(e) =>
+                                        setDraft(
+                                          (d) =>
+                                            d && {
+                                              ...d,
+                                              cleaningRules: (
+                                                d.cleaningRules ?? []
+                                              ).map((r, i) =>
+                                                i === ridx
+                                                  ? {
+                                                      ...r,
+                                                      nextProduct:
+                                                        e.target.value,
+                                                    }
+                                                  : r,
+                                              ),
+                                            },
+                                        )
+                                      }
+                                      className="h-6 text-[11px] px-1.5"
+                                    />
+                                  ) : (
+                                    rule.nextProduct
+                                  )}
+                                </TableCell>
+                                <TableCell className="py-1 text-[11px]">
+                                  {editMode ? (
+                                    <Select
+                                      value={rule.requiredCleaningLevel}
+                                      onValueChange={(v) =>
+                                        setDraft(
+                                          (d) =>
+                                            d && {
+                                              ...d,
+                                              cleaningRules: (
+                                                d.cleaningRules ?? []
+                                              ).map((r, i) =>
+                                                i === ridx
+                                                  ? {
+                                                      ...r,
+                                                      requiredCleaningLevel:
+                                                        v as CleaningLevel,
+                                                    }
+                                                  : r,
+                                              ),
+                                            },
+                                        )
+                                      }
+                                    >
+                                      <SelectTrigger className="h-6 text-[11px] px-1.5">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem
+                                          value="None"
+                                          className="text-[11px]"
+                                        >
+                                          None
+                                        </SelectItem>
+                                        <SelectItem
+                                          value="Minor"
+                                          className="text-[11px]"
+                                        >
+                                          Minor
+                                        </SelectItem>
+                                        <SelectItem
+                                          value="Major"
+                                          className="text-[11px]"
+                                        >
+                                          Major
+                                        </SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  ) : (
+                                    <span
+                                      className={cn(
+                                        "px-1.5 py-0.5 rounded text-[10px] font-medium border",
+                                        {
+                                          "bg-gray-50 text-gray-600 border-gray-200":
+                                            rule.requiredCleaningLevel ===
+                                            "None",
+                                          "bg-amber-50 text-amber-700 border-amber-200":
+                                            rule.requiredCleaningLevel ===
+                                            "Minor",
+                                          "bg-red-50 text-red-700 border-red-200":
+                                            rule.requiredCleaningLevel ===
+                                            "Major",
+                                        },
+                                      )}
+                                    >
+                                      {rule.requiredCleaningLevel}
+                                    </span>
+                                  )}
+                                </TableCell>
+                                {editMode && (
+                                  <TableCell className="py-1">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDraft(
+                                          (d) =>
+                                            d && {
+                                              ...d,
+                                              cleaningRules: (
+                                                d.cleaningRules ?? []
+                                              ).filter((_, i) => i !== ridx),
+                                            },
+                                        )
+                                      }
+                                      className="text-destructive hover:text-destructive/80 text-[10px] px-1"
+                                    >
+                                      ✕
+                                    </button>
+                                  </TableCell>
+                                )}
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                      {editMode && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] mt-2"
+                          onClick={() =>
+                            setDraft(
+                              (d) =>
+                                d && {
+                                  ...d,
+                                  cleaningRules: [
+                                    ...(d.cleaningRules ?? []),
+                                    {
+                                      id: `cr_${Date.now()}`,
+                                      previousProduct: "",
+                                      nextProduct: "",
+                                      requiredCleaningLevel:
+                                        "None" as CleaningLevel,
+                                    },
+                                  ],
+                                },
+                            )
+                          }
+                        >
+                          <Plus size={12} /> Add Rule
+                        </Button>
+                      )}
+                    </TabsContent>
+                  )}
 
                   {/* LOGBOOK TAB */}
                   <TabsContent
@@ -1978,7 +3007,85 @@ export default function DataManager() {
         </DialogContent>
       </Dialog>
 
-      {/* Footer */}
+      {/* GMP Validation Result Dialog */}
+      <Dialog open={validateDialogOpen} onOpenChange={setValidateDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <Shield size={16} className="text-primary" /> GMP Validation
+              Result
+            </DialogTitle>
+          </DialogHeader>
+          {validateResult && (
+            <div className="space-y-3 py-1">
+              <div
+                className={cn(
+                  "flex items-center gap-2 px-4 py-3 rounded-lg border text-[13px] font-semibold",
+                  validateResult.success
+                    ? "bg-green-50 text-green-700 border-green-200"
+                    : "bg-red-50 text-red-700 border-red-200",
+                )}
+              >
+                {validateResult.success ? (
+                  <CheckCircle2 size={16} />
+                ) : (
+                  <XCircle size={16} />
+                )}
+                {validateResult.success
+                  ? "Equipment cleared for execution"
+                  : "Equipment BLOCKED — validation failed"}
+              </div>
+              {validateResult.errors.length > 0 && (
+                <div>
+                  <p className="text-[11.5px] font-semibold text-destructive mb-1.5">
+                    Errors ({validateResult.errors.length}):
+                  </p>
+                  <ul className="space-y-1">
+                    {validateResult.errors.map((e) => (
+                      <li
+                        key={e}
+                        className="flex gap-2 text-[12px] text-destructive"
+                      >
+                        <XCircle size={13} className="shrink-0 mt-0.5" />
+                        {e}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {validateResult.warnings.length > 0 && (
+                <div>
+                  <p className="text-[11.5px] font-semibold text-amber-600 mb-1.5">
+                    Warnings ({validateResult.warnings.length}):
+                  </p>
+                  <ul className="space-y-1">
+                    {validateResult.warnings.map((w) => (
+                      <li
+                        key={w}
+                        className="flex gap-2 text-[12px] text-amber-700"
+                      >
+                        <span className="shrink-0">⚠</span>
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {validateResult.success &&
+                validateResult.warnings.length === 0 && (
+                  <p className="text-[12px] text-muted-foreground">
+                    All GMP checks passed. No warnings.
+                  </p>
+                )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button size="sm" onClick={() => setValidateDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ReportDialog
         open={reportOpen}

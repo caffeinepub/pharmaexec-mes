@@ -25,6 +25,7 @@ import {
   Users,
 } from "lucide-react";
 import { useState } from "react";
+import DataPortabilityButtons from "./DataPortabilityButtons";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -164,6 +165,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <div className="flex items-center gap-3 ml-auto">
+            <DataPortabilityButtons />
             <Button
               variant="ghost"
               size="icon"
