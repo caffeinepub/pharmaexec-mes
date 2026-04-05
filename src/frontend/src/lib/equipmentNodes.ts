@@ -74,6 +74,10 @@ export interface EquipmentNode {
   originalId?: string | null;
   revisedById?: string | null;
   changeControlReason?: string;
+  // Lifecycle & Audit fields (added for MES refactor)
+  createdBy?: string; // default 'System'
+  updatedAt?: string; // ISO string
+  isUsedInBatch?: boolean; // default false — locks Edit/Delete when true
 }
 
 export const INITIAL_DATA: EquipmentNode[] = [
@@ -319,12 +323,13 @@ export const INITIAL_DATA: EquipmentNode[] = [
     cleaningRules: [],
     cleaningLog: null,
   },
-  // ee1: Approved, Active, Good, PM On Time — all green
+  // ee1: Executed + isUsedInBatch — terminal lock demo
   {
     id: "ee1",
     identifier: "EE-COAT-S",
     shortDescription: "Coater_S",
-    description: "Small non-automated coating unit",
+    description:
+      "Small non-automated coating unit — currently in active batch B-2026-001 (Amoxicillin)",
     level: "2",
     inventoryNumber: "INV-2020-0310",
     manufacturer: "Pharma Machines Ltd",
@@ -345,8 +350,21 @@ export const INITIAL_DATA: EquipmentNode[] = [
     historianServerDefault: "PIServer1",
     historianServer: "",
     createdAt: "2024-01-12T08:00:00Z",
-    changeHistory: [],
-    status: "Approved",
+    createdBy: "Dr. Sarah Chen",
+    updatedAt: "2026-04-01T10:00:00Z",
+    changeHistory: [
+      {
+        timestamp: "2026-04-01T10:00:00Z",
+        field: "status",
+        oldValue: "Approved",
+        newValue: "Executed",
+        changedBy: "Dr. Sarah Chen",
+        action: "Update",
+        reason: "Batch Execution B-2026-001 confirmed",
+      },
+    ],
+    status: "Executed",
+    isUsedInBatch: true,
     maintenance_status: "Active",
     health_status: "Good",
     last_maintenance_date: "2025-12-01",
@@ -456,6 +474,9 @@ export const INITIAL_DATA: EquipmentNode[] = [
     createdAt: "2024-01-12T09:00:00Z",
     changeHistory: [],
     status: "Approved",
+    isUsedInBatch: true,
+    createdBy: "Dr. Sarah Chen",
+    updatedAt: "2026-03-28T11:00:00Z",
     maintenance_status: "Active",
     health_status: "Good",
     last_maintenance_date: "2026-01-20",
@@ -507,7 +528,10 @@ export const INITIAL_DATA: EquipmentNode[] = [
     historianServer: "PI-MAIN",
     createdAt: "2024-01-12T09:15:00Z",
     changeHistory: [],
-    status: "Draft",
+    status: "Executed",
+    isUsedInBatch: false,
+    createdBy: "Dr. Sarah Chen",
+    updatedAt: "2026-03-15T09:00:00Z",
     maintenance_status: "Active",
     health_status: "Good",
     last_maintenance_date: "2026-02-10",

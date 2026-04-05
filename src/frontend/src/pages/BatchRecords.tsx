@@ -55,7 +55,7 @@ import {
   Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { BatchStatus } from "../backend";
 import type { BatchRecord } from "../backend";
@@ -626,6 +626,7 @@ export default function BatchRecords() {
     warnings: string[];
   } | null>(null);
   const [gmpBlockEquipId, setGmpBlockEquipId] = useState("");
+  const [dismissedApprovalAlert, setDismissedApprovalAlert] = useState(false);
 
   // Local overrides for status changes
   const [statusOverrides, setStatusOverrides] = useState<
@@ -689,6 +690,39 @@ export default function BatchRecords() {
   // selectedStep computed in sub-component
 
   // Filtered list
+  const approvalAlertOrders = useMemo(() => {
+    const inProcessOrders = orders.filter((order) => {
+      const status = statusOverrides[order.batchId] ?? order.pharmaSuiteStatus;
+      return status === "In Process";
+    });
+    const alertOrders: string[] = [];
+    const equipmentNodes = INITIAL_DATA.filter(
+      (n) =>
+        n.entityType === "EquipmentEntity" || n.entityType === "EquipmentClass",
+    );
+    for (const order of inProcessOrders) {
+      const steps = stepOverrides[order.batchId] ?? order.steps ?? [];
+      let hasNonApproved = false;
+      for (const step of steps) {
+        const matched = equipmentNodes.find(
+          (n) =>
+            n.identifier.includes(step.workCenter) ||
+            step.workCenter.includes(n.identifier) ||
+            (step.workCenter &&
+              n.identifier &&
+              step.workCenter.split("-").slice(1).join("-") ===
+                n.identifier.split("-").slice(1).join("-")),
+        );
+        if (matched && matched.status !== "Approved") {
+          hasNonApproved = true;
+          break;
+        }
+      }
+      if (hasNonApproved) alertOrders.push(order.batchId);
+    }
+    return alertOrders;
+  }, [orders, statusOverrides, stepOverrides]);
+
   const filteredOrders = orders.filter((o) => {
     const status = statusOverrides[o.batchId] ?? o.pharmaSuiteStatus;
     const matchFilter = filterTab === "all" || status === filterTab;
@@ -862,6 +896,62 @@ export default function BatchRecords() {
 
   const applyTransition = () => {
     if (!selectedOrder || !pendingTransition) return;
+
+    // GMP check before transitioning to In Process
+    if (pendingTransition === "In Process") {
+      const equipmentNodes = INITIAL_DATA.filter(
+        (n) =>
+          n.entityType === "EquipmentEntity" ||
+          n.entityType === "EquipmentClass",
+      );
+      const steps =
+        stepOverrides[selectedOrder.batchId] ?? selectedOrder.steps ?? [];
+      let blockingResult: {
+        success: boolean;
+        errors: string[];
+        warnings: string[];
+      } | null = null;
+      let blockingEquipId = "";
+
+      for (const step of steps) {
+        const matchedEquip = equipmentNodes.find(
+          (n) =>
+            n.identifier.includes(step.workCenter) ||
+            step.workCenter.includes(n.identifier) ||
+            (step.workCenter &&
+              n.identifier &&
+              step.workCenter.split("-").slice(1).join("-") ===
+                n.identifier.split("-").slice(1).join("-")),
+        );
+        if (matchedEquip) {
+          const result = validateExecution({
+            equipment: {
+              status: matchedEquip.status ?? "Draft",
+              maintenance_status: matchedEquip.maintenance_status ?? "Active",
+              health_status: matchedEquip.health_status ?? "Good",
+              pm_due_date: matchedEquip.pm_due_date ?? "",
+              cleaningLog: matchedEquip.cleaningLog ?? null,
+              cleaningRules: matchedEquip.cleaningRules ?? [],
+            },
+            equipmentId: matchedEquip.identifier,
+          });
+          if (!result.success) {
+            blockingResult = result;
+            blockingEquipId = matchedEquip.identifier;
+            break;
+          }
+        }
+      }
+      if (blockingResult && !blockingResult.success) {
+        setGmpBlockResult(blockingResult);
+        setGmpBlockEquipId(blockingEquipId);
+        setGmpBlockOpen(true);
+        setChangeStatusOpen(false);
+        setSignatureOpen(false);
+        return;
+      }
+    }
+
     setStatusOverrides((p) => ({
       ...p,
       [selectedOrder.batchId]: pendingTransition,
@@ -1270,6 +1360,32 @@ export default function BatchRecords() {
                   </p>
                 </div>
               </div>
+
+              {/* Real-time Approval Alarm Banner */}
+              {approvalAlertOrders.length > 0 && !dismissedApprovalAlert && (
+                <div
+                  className="flex items-center gap-3 px-4 py-2.5 bg-red-50 border-b border-red-300 text-red-800 shrink-0"
+                  data-ocid="batch_orders.approval_alarm.error_state"
+                >
+                  <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[12px] font-semibold">
+                      Warning: Equipment approval removed during execution
+                    </span>
+                    <span className="text-[11px] ml-2 text-red-700">
+                      Affected batches: {approvalAlertOrders.join(", ")}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-[11px] font-medium px-2 py-0.5 rounded border border-red-300 hover:bg-red-100 transition-colors shrink-0"
+                    onClick={() => setDismissedApprovalAlert(true)}
+                    data-ocid="batch_orders.approval_alarm.close_button"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
 
               {/* Detail tabs */}
               <Tabs
@@ -1906,15 +2022,30 @@ export default function BatchRecords() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-red-700">
-              <XCircle size={18} /> GMP Validation Failed — Release Blocked
+              <XCircle size={18} /> Execution Blocked
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
+            {gmpBlockResult?.errors?.some(
+              (e) =>
+                e.toLowerCase().includes("status") ||
+                e.toLowerCase().includes("approved"),
+            ) && (
+              <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded px-3 py-2">
+                <AlertTriangle
+                  size={14}
+                  className="text-red-600 mt-0.5 shrink-0"
+                />
+                <p className="text-[12px] text-red-800 font-medium">
+                  Equipment is not Approved for use. Please approve before
+                  execution.
+                </p>
+              </div>
+            )}
             <p className="text-[13px] text-muted-foreground">
               Equipment{" "}
               <span className="font-mono font-semibold">{gmpBlockEquipId}</span>{" "}
-              did not pass GMP validation. Resolve all errors before releasing
-              this order.
+              did not pass GMP validation. Resolve all errors before proceeding.
             </p>
             {gmpBlockResult?.errors && gmpBlockResult.errors.length > 0 && (
               <div>

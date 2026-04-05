@@ -60,7 +60,13 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
-import React, { useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ReportDialog } from "../components/ReportDialog";
@@ -85,6 +91,20 @@ import {
   computePmStatus,
   validateExecution,
 } from "../lib/gmpValidation";
+import {
+  canApprove,
+  canDelete,
+  canEdit,
+  canExecute,
+  canMakeDraft,
+  getDeleteTooltip,
+  getEditTooltip,
+  getStatusBadgeClass,
+} from "../utils/dmRules";
+import { validateNewRecord, validateRecord } from "../utils/dmValidation";
+
+const PAGE_SIZE = 15;
+const CURRENT_USER = "Dr. Sarah Chen";
 
 const _PRODUCTS = [
   "Amoxicillin 250mg",
@@ -261,6 +281,16 @@ export default function DataManager() {
   const [validateResult, setValidateResult] = useState<ValidationResult | null>(
     null,
   );
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  // Execute confirmation dialog
+  const [executeConfirmOpen, setExecuteConfirmOpen] = useState(false);
+  // Form validation errors (inline display)
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  // New record form errors
+  const [newFormErrors, setNewFormErrors] = useState<Record<string, string>>(
+    {},
+  );
 
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -273,36 +303,82 @@ export default function DataManager() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  const filtered = nodes.filter(
-    (n) =>
-      (selectedEntityType === "all" || n.entityType === selectedEntityType) &&
-      (search.trim() === "" ||
-        n.shortDescription.toLowerCase().includes(search.toLowerCase()) ||
-        n.identifier.toLowerCase().includes(search.toLowerCase())),
+  const filtered = useMemo(
+    () =>
+      nodes.filter(
+        (n) =>
+          (selectedEntityType === "all" ||
+            n.entityType === selectedEntityType) &&
+          (search.trim() === "" ||
+            n.shortDescription.toLowerCase().includes(search.toLowerCase()) ||
+            n.identifier.toLowerCase().includes(search.toLowerCase())),
+      ),
+    [nodes, selectedEntityType, search],
+  );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  const paginated = useMemo(
+    () =>
+      filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filtered, currentPage],
   );
 
   const selected = nodes.find((n) => n.id === selectedId) ?? null;
 
-  const handleSelect = (id: string) => {
-    if (selectedId === id) {
+  const handleSelect = useCallback(
+    (id: string) => {
+      if (selectedId === id) {
+        if (editMode) {
+          if (!confirm("Discard unsaved changes?")) return;
+        }
+        setSelectedId(null);
+        setEditMode(false);
+        setDraft(null);
+        setFormErrors({});
+        return;
+      }
       if (editMode) {
         if (!confirm("Discard unsaved changes?")) return;
+        setEditMode(false);
+        setDraft(null);
+        setFormErrors({});
       }
-      setSelectedId(null);
-      setEditMode(false);
-      setDraft(null);
-      return;
-    }
-    if (editMode) {
-      if (!confirm("Discard unsaved changes?")) return;
-      setEditMode(false);
-      setDraft(null);
-    }
-    setSelectedId(id);
-  };
+      setSelectedId(id);
+    },
+    [selectedId, editMode],
+  );
 
   const handleEdit = () => {
     if (!selected) return;
+    // Batch safety check
+    if (selected.isUsedInBatch) {
+      toast.error(
+        "This record is used in an active batch and cannot be modified",
+      );
+      return;
+    }
+    if (
+      !canEdit({
+        status: (selected.status ?? "Draft") as
+          | "Draft"
+          | "Approved"
+          | "Executed",
+        isUsedInBatch: selected.isUsedInBatch,
+      })
+    ) {
+      toast.error(
+        getEditTooltip({
+          status: (selected.status ?? "Draft") as
+            | "Draft"
+            | "Approved"
+            | "Executed",
+          isUsedInBatch: selected.isUsedInBatch,
+        }),
+      );
+      return;
+    }
+    setFormErrors({});
     setDraft({ ...selected });
     setEditMode(true);
   };
@@ -313,105 +389,117 @@ export default function DataManager() {
 
   const handleSave = () => {
     if (!draft) return;
+    // Run field-level validation before confirm
+    const validation = validateRecord({
+      shortDescription: draft.shortDescription,
+      identifier: draft.identifier,
+    });
+    if (!validation.valid) {
+      setFormErrors(validation.errors);
+      toast.error("Please fix the validation errors before saving");
+      return;
+    }
+    setFormErrors({});
     setSaveConfirmReason("");
     setSaveConfirmOpen(true);
   };
 
   const handleConfirmSave = () => {
     if (!draft) return;
-    const now = new Date().toISOString();
-    const prev = nodes.find((n) => n.id === draft.id);
-    const changes: ChangeEntry[] = [];
-    if (prev) {
-      const fields = Object.keys(draft) as (keyof EquipmentNode)[];
-      for (const f of fields) {
-        if (
-          f === "changeHistory" ||
-          f === "createdAt" ||
-          f === "cleaningRules" ||
-          f === "cleaningLog"
-        )
-          continue;
-        const oldVal = String(prev[f] ?? "");
-        const newVal = String(draft[f] ?? "");
-        if (oldVal !== newVal) {
-          changes.push({
-            timestamp: now,
-            field: f,
-            oldValue: oldVal,
-            newValue: newVal,
-            changedBy: "Dr. Sarah Chen",
-            reason: saveConfirmReason,
-          });
+    try {
+      const now = new Date().toISOString();
+      const prev = nodes.find((n) => n.id === draft.id);
+      const changes: ChangeEntry[] = [];
+      if (prev) {
+        const fields = Object.keys(draft) as (keyof EquipmentNode)[];
+        for (const f of fields) {
+          if (
+            f === "changeHistory" ||
+            f === "createdAt" ||
+            f === "cleaningRules" ||
+            f === "cleaningLog"
+          )
+            continue;
+          const oldVal = String(prev[f] ?? "");
+          const newVal = String(draft[f] ?? "");
+          if (oldVal !== newVal) {
+            changes.push({
+              timestamp: now,
+              field: f,
+              oldValue: oldVal,
+              newValue: newVal,
+              changedBy: CURRENT_USER,
+              reason: saveConfirmReason,
+            });
+          }
         }
       }
+      setNodes((prevNodes) =>
+        prevNodes.map((n) =>
+          n.id === draft.id
+            ? {
+                ...draft,
+                updatedAt: now,
+                changeHistory: [...draft.changeHistory, ...changes],
+              }
+            : n,
+        ),
+      );
+      setEditMode(false);
+      setDraft(null);
+      setFormErrors({});
+      setSaveConfirmOpen(false);
+      toast.success("Changes saved successfully");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
     }
-    setNodes((prev) =>
-      prev.map((n) =>
-        n.id === draft.id
-          ? { ...draft, changeHistory: [...draft.changeHistory, ...changes] }
-          : n,
-      ),
-    );
-    setEditMode(false);
-    setDraft(null);
-    setSaveConfirmOpen(false);
-    toast.success("Changes saved successfully");
   };
 
   const handleApprove = () => {
     if (!selected) return;
-    const now = new Date().toISOString();
-    setNodes((prev) => {
-      return prev.map((n) => {
-        // Approve the current node
-        if (n.id === selected.id) {
-          return {
-            ...n,
-            status: "Approved" as GmpStatus,
-            changeHistory: [
-              ...n.changeHistory,
-              {
-                timestamp: now,
-                field: "status",
-                oldValue: n.status ?? "Draft",
-                newValue: "Approved",
-                changedBy: "Dr. Sarah Chen",
-                action: "Update" as const,
-                reason: "GMP Status Approval",
-              },
-            ],
-          };
-        }
-        // Supersede the original record if this is a revision
-        if (
-          selected.originalId &&
-          (n.id === selected.originalId ||
-            n.originalId === selected.originalId) &&
-          n.id !== selected.id
-        ) {
-          return {
-            ...n,
-            status: "Superseded" as GmpStatus,
-            revisedById: selected.id,
-            changeHistory: [
-              ...n.changeHistory,
-              {
-                timestamp: now,
-                field: "status",
-                oldValue: n.status ?? "Approved",
-                newValue: "Superseded",
-                changedBy: "Dr. Sarah Chen",
-                action: "Update" as const,
-                reason: `Superseded by revision v${selected.versionNumber ?? 2}: ${selected.changeControlReason ?? ""}`,
-              },
-            ],
-          };
-        }
-        return n;
+    if (
+      !canApprove({
+        status: (selected.status ?? "Draft") as
+          | "Draft"
+          | "Approved"
+          | "Executed",
+      })
+    ) {
+      toast.error("Only Draft records can be approved");
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      setNodes((prev) => {
+        return prev.map((n) => {
+          if (n.id === selected.id) {
+            return {
+              ...n,
+              status: "Approved" as GmpStatus,
+              updatedAt: now,
+              changeHistory: [
+                ...n.changeHistory,
+                {
+                  timestamp: now,
+                  field: "status",
+                  oldValue: n.status ?? "Draft",
+                  newValue: "Approved",
+                  changedBy: CURRENT_USER,
+                  action: "Update" as const,
+                  reason: "GMP Status Approval",
+                },
+              ],
+            };
+          }
+          return n;
+        });
       });
-    });
-    toast.success("Record approved. Previous version marked as Superseded.");
+      toast.success("Record approved successfully");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const handleMakeDraft = () => {
@@ -421,58 +509,121 @@ export default function DataManager() {
 
   const handleConfirmMakeDraft = () => {
     if (!selected) return;
-    const now = new Date().toISOString();
-    setNodes((prev) =>
-      prev.map((n) =>
-        n.id === selected.id
-          ? {
-              ...n,
-              status: "Draft" as GmpStatus,
-              changeHistory: [
-                ...n.changeHistory,
-                {
-                  timestamp: now,
-                  field: "status",
-                  oldValue: "Approved",
-                  newValue: "Draft",
-                  changedBy: "Dr. Sarah Chen",
-                  action: "Update" as const,
-                  reason: "Converted to Draft for modification",
-                },
-              ],
-            }
-          : n,
-      ),
-    );
-    setMakeDraftConfirmOpen(false);
-    toast.success("Record converted to Draft. You can now edit.");
+    if (
+      !canMakeDraft({
+        status: (selected.status ?? "Draft") as
+          | "Draft"
+          | "Approved"
+          | "Executed",
+      })
+    ) {
+      toast.error(
+        "Only Approved records can be converted to Draft. Executed records are permanently locked.",
+      );
+      setMakeDraftConfirmOpen(false);
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === selected.id
+            ? {
+                ...n,
+                status: "Draft" as GmpStatus,
+                updatedAt: now,
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "status",
+                    oldValue: "Approved",
+                    newValue: "Draft",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: "Converted to Draft for modification",
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setMakeDraftConfirmOpen(false);
+      toast.success("Record converted to Draft. You can now edit.");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const handleDelete = () => {
     if (!selected) return;
-    if (selected.status === "Approved") {
-      toast.error("Approved records cannot be deleted (GMP compliance).");
+    const ruleRecord = {
+      status: (selected.status ?? "Draft") as "Draft" | "Approved" | "Executed",
+      isUsedInBatch: selected.isUsedInBatch,
+    };
+    if (!canDelete(ruleRecord)) {
+      toast.error(getDeleteTooltip(ruleRecord));
       return;
     }
-    if (!confirm(`Delete "${selected.shortDescription}"?`)) return;
-    setNodes((prev) => prev.filter((n) => n.id !== selected.id));
-    setSelectedId(null);
-    toast.success("Item deleted");
+    if (
+      !confirm(
+        `Delete "${selected.shortDescription}"? This action cannot be undone.`,
+      )
+    )
+      return;
+    try {
+      setNodes((prev) => prev.filter((n) => n.id !== selected.id));
+      setSelectedId(null);
+      toast.success("Item deleted successfully");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const handleCreate = () => {
-    const id = `node_${Date.now()}`;
-    const node: EquipmentNode = {
-      ...newNode,
-      id,
-      createdAt: new Date().toISOString(),
-      changeHistory: [],
-    };
-    setNodes((prev) => [...prev, node]);
-    setNewDialogOpen(false);
-    setNewNode({ ...EMPTY_NODE });
-    setSelectedId(id);
-    toast.success("New item created");
+    // Validate new record fields
+    const validation = validateNewRecord({
+      identifier: newNode.identifier,
+      shortDescription: newNode.shortDescription,
+    });
+    if (!validation.valid) {
+      setNewFormErrors(validation.errors);
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      const id = `node_${Date.now()}`;
+      const node: EquipmentNode = {
+        ...newNode,
+        id,
+        createdAt: now,
+        createdBy: CURRENT_USER,
+        updatedAt: now,
+        isUsedInBatch: false,
+        changeHistory: [
+          {
+            timestamp: now,
+            field: "*",
+            oldValue: "",
+            newValue: "Created",
+            changedBy: CURRENT_USER,
+            action: "Create",
+            reason: "Record created",
+          },
+        ],
+      };
+      setNodes((prev) => [...prev, node]);
+      setNewDialogOpen(false);
+      setNewNode({ ...EMPTY_NODE });
+      setNewFormErrors({});
+      setSelectedId(id);
+      toast.success("New item created successfully");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const handleEntityTypeChange = (type: EntityType | "all") => {
@@ -480,8 +631,63 @@ export default function DataManager() {
     setSelectedId(null);
     setEditMode(false);
     setDraft(null);
+    setFormErrors({});
+    setCurrentPage(1);
     setIsLoading(true);
     setTimeout(() => setIsLoading(false), 300);
+  };
+
+  const handleExecute = () => {
+    if (!selected) return;
+    if (
+      !canExecute({
+        status: (selected.status ?? "Draft") as
+          | "Draft"
+          | "Approved"
+          | "Executed",
+      })
+    ) {
+      toast.error("Only Approved records can be executed");
+      return;
+    }
+    setExecuteConfirmOpen(true);
+  };
+
+  const handleConfirmExecute = () => {
+    if (!selected) return;
+    try {
+      const now = new Date().toISOString();
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === selected.id
+            ? {
+                ...n,
+                status: "Executed" as GmpStatus,
+                updatedAt: now,
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "status",
+                    oldValue: "Approved",
+                    newValue: "Executed",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: "Batch Execution confirmed — terminal state",
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setExecuteConfirmOpen(false);
+      toast.success(
+        "Record executed successfully. This record is now permanently locked.",
+      );
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const handleValidate = () => {
@@ -602,8 +808,14 @@ export default function DataManager() {
                       onClick={editMode ? handleSave : handleEdit}
                       disabled={
                         !selected ||
-                        selected?.status === "Superseded" ||
-                        (!editMode && selected?.status === "Approved")
+                        (!editMode &&
+                          !canEdit({
+                            status: (selected.status ?? "Draft") as
+                              | "Draft"
+                              | "Approved"
+                              | "Executed",
+                            isUsedInBatch: selected.isUsedInBatch,
+                          }))
                       }
                       data-ocid="data_manager.save_button"
                     >
@@ -619,27 +831,83 @@ export default function DataManager() {
                     </Button>
                   </span>
                 </TooltipTrigger>
-                {!editMode && selected?.status === "Approved" && (
-                  <TooltipContent>
-                    <p>
-                      Approved records are read-only. Click &apos;Make
-                      Draft&apos; to edit.
-                    </p>
-                  </TooltipContent>
-                )}
+                {!editMode &&
+                  selected &&
+                  !canEdit({
+                    status: (selected.status ?? "Draft") as
+                      | "Draft"
+                      | "Approved"
+                      | "Executed",
+                    isUsedInBatch: selected.isUsedInBatch,
+                  }) && (
+                    <TooltipContent
+                      side="bottom"
+                      className="max-w-[220px] text-center"
+                    >
+                      <p>
+                        {getEditTooltip({
+                          status: (selected.status ?? "Draft") as
+                            | "Draft"
+                            | "Approved"
+                            | "Executed",
+                          isUsedInBatch: selected.isUsedInBatch,
+                        })}
+                      </p>
+                    </TooltipContent>
+                  )}
               </Tooltip>
             </TooltipProvider>
 
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 gap-1 text-[12px] px-3 text-destructive hover:text-destructive"
-              onClick={handleDelete}
-              disabled={!selected}
-              data-ocid="data_manager.delete_button"
-            >
-              <Trash2 size={13} /> Delete
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 text-[12px] px-3 text-destructive hover:text-destructive"
+                      onClick={handleDelete}
+                      disabled={
+                        !selected ||
+                        !canDelete({
+                          status: (selected.status ?? "Draft") as
+                            | "Draft"
+                            | "Approved"
+                            | "Executed",
+                          isUsedInBatch: selected.isUsedInBatch,
+                        })
+                      }
+                      data-ocid="data_manager.delete_button"
+                    >
+                      <Trash2 size={13} /> Delete
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                {selected &&
+                  !canDelete({
+                    status: (selected.status ?? "Draft") as
+                      | "Draft"
+                      | "Approved"
+                      | "Executed",
+                    isUsedInBatch: selected.isUsedInBatch,
+                  }) && (
+                    <TooltipContent
+                      side="bottom"
+                      className="max-w-[220px] text-center"
+                    >
+                      <p>
+                        {getDeleteTooltip({
+                          status: (selected.status ?? "Draft") as
+                            | "Draft"
+                            | "Approved"
+                            | "Executed",
+                          isUsedInBatch: selected.isUsedInBatch,
+                        })}
+                      </p>
+                    </TooltipContent>
+                  )}
+              </Tooltip>
+            </TooltipProvider>
 
             <Button
               size="sm"
@@ -686,7 +954,10 @@ export default function DataManager() {
               />
               <Input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setCurrentPage(1);
+                }}
                 placeholder="Search items…"
                 className="h-7 pl-8 text-[12px] bg-white"
                 data-ocid="data_manager.search_input"
@@ -738,7 +1009,7 @@ export default function DataManager() {
                     <p className="text-[13px]">No items match your search</p>
                   </div>
                 )}
-                {filtered.map((node, idx) => {
+                {paginated.map((node, idx) => {
                   const colors = ENTITY_COLORS[node.entityType];
                   const isSelected = selectedId === node.id;
                   const showGmp = isEquipmentNode(node);
@@ -774,6 +1045,7 @@ export default function DataManager() {
                           ? "ring-2 ring-primary ring-offset-1 shadow-md"
                           : "hover:shadow-sm hover:border-border",
                         node.status === "Superseded" && "opacity-50",
+                        node.status === "Executed" && "border-l-blue-400",
                       )}
                     >
                       <div className="flex items-start justify-between gap-2 mb-1.5">
@@ -800,6 +1072,12 @@ export default function DataManager() {
                       {node.parentId && (
                         <p className="text-[10.5px] text-muted-foreground mt-1">
                           ↳ {getParentLabel(node.parentId)}
+                        </p>
+                      )}
+                      {node.createdAt && (
+                        <p className="text-[10px] text-muted-foreground/60 mt-1">
+                          Created:{" "}
+                          {new Date(node.createdAt).toLocaleDateString()}
                         </p>
                       )}
                       {showGmp && (
@@ -852,18 +1130,38 @@ export default function DataManager() {
                           <span
                             className={cn(
                               "text-[9px] font-semibold px-1.5 py-0.5 rounded-full border",
-                              {
-                                "bg-green-50 text-green-700 border-green-200":
-                                  node.status === "Approved",
-                                "bg-amber-50 text-amber-700 border-amber-200":
-                                  node.status === "Draft" || !node.status,
-                                "bg-gray-100 text-gray-400 border-gray-200":
-                                  node.status === "Superseded",
-                              },
+                              getStatusBadgeClass(node.status ?? "Draft"),
                             )}
                           >
                             {node.status ?? "Draft"}
                           </span>
+                          {/* Usability Badge */}
+                          <span
+                            className={cn(
+                              "text-[9.5px] font-bold px-1.5 py-0.5 rounded-full border",
+                              {
+                                "bg-green-100 text-green-800 border-green-300":
+                                  node.status === "Approved",
+                                "bg-blue-100 text-blue-800 border-blue-300":
+                                  node.status === "Executed",
+                                "bg-red-100 text-red-800 border-red-300":
+                                  node.status !== "Approved" &&
+                                  node.status !== "Executed",
+                              },
+                            )}
+                          >
+                            {node.status === "Approved"
+                              ? "✓ Usable"
+                              : node.status === "Executed"
+                                ? "⊘ Executed"
+                                : "✗ Not Usable"}
+                          </span>
+                          {/* In Batch badge */}
+                          {node.isUsedInBatch && (
+                            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-300">
+                              In Batch
+                            </span>
+                          )}
                         </div>
                       )}
                     </button>
@@ -872,6 +1170,61 @@ export default function DataManager() {
               </div>
             )}
           </div>
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-1.5 border-t border-border bg-[oklch(0.975_0.004_240)] shrink-0">
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() =>
+                          setCurrentPage((p) => Math.max(1, p - 1))
+                        }
+                        disabled={currentPage === 1}
+                        data-ocid="data_manager.pagination_prev"
+                      >
+                        ‹ Prev
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {currentPage === 1 && (
+                    <TooltipContent>First page</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+              <span className="text-[11px] text-muted-foreground font-medium">
+                Page {currentPage} of {totalPages}
+              </span>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() =>
+                          setCurrentPage((p) => Math.min(totalPages, p + 1))
+                        }
+                        disabled={currentPage === totalPages}
+                        data-ocid="data_manager.pagination_next"
+                      >
+                        Next ›
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {currentPage === totalPages && (
+                    <TooltipContent>Last page</TooltipContent>
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+          )}
 
           {/* Status bar */}
           <div className="flex items-center gap-3 px-4 py-1.5 border-t border-border bg-[oklch(0.975_0.004_240)] text-[11px] text-muted-foreground shrink-0">
@@ -905,23 +1258,22 @@ export default function DataManager() {
                     <span
                       className={cn(
                         "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
-                        {
-                          "bg-green-50 text-green-700 border-green-200":
-                            currentNode.status === "Approved",
-                          "bg-amber-50 text-amber-700 border-amber-200":
-                            currentNode.status === "Draft" ||
-                            !currentNode.status,
-                          "bg-gray-100 text-gray-500 border-gray-200 line-through":
-                            currentNode.status === "Superseded",
-                        },
+                        getStatusBadgeClass(currentNode.status ?? "Draft"),
                       )}
                     >
                       {currentNode.status === "Approved"
                         ? "✓ Approved"
-                        : currentNode.status === "Superseded"
-                          ? "⊘ Superseded"
-                          : "Draft"}
+                        : currentNode.status === "Executed"
+                          ? "⊘ Executed"
+                          : currentNode.status === "Superseded"
+                            ? "⊘ Superseded"
+                            : "Draft"}
                     </span>
+                    {currentNode.isUsedInBatch && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-300">
+                        In Batch
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-1.5 justify-end ml-2">
@@ -942,54 +1294,77 @@ export default function DataManager() {
                         onClick={() => {
                           setEditMode(false);
                           setDraft(null);
+                          setFormErrors({});
                         }}
                         data-ocid="data_manager.cancel_button"
                       >
                         Cancel
                       </Button>
                     </>
+                  ) : currentNode.status === "Executed" ? (
+                    /* Executed: strictly locked — only Validate remains */
+                    <>
+                      {isEquipmentNode(currentNode) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3"
+                          onClick={handleValidate}
+                          data-ocid="data_manager.validate_button"
+                        >
+                          <CheckCircle2 size={12} /> Validate
+                        </Button>
+                      )}
+                    </>
                   ) : (
                     <>
-                      {currentNode.status === "Approved" ? (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 gap-1 text-[12px] px-3"
-                                  disabled
-                                  data-ocid="data_manager.edit_button"
+                      {/* Edit button — only enabled for Draft, not in batch */}
+                      {(() => {
+                        const rr = {
+                          status: (currentNode.status ?? "Draft") as
+                            | "Draft"
+                            | "Approved"
+                            | "Executed",
+                          isUsedInBatch: currentNode.isUsedInBatch,
+                        };
+                        const editable = canEdit(rr);
+                        const tooltip = getEditTooltip(rr);
+                        return (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 gap-1 text-[12px] px-3"
+                                    onClick={handleEdit}
+                                    disabled={!editable}
+                                    data-ocid="data_manager.edit_button"
+                                  >
+                                    <Edit2 size={12} /> Edit
+                                  </Button>
+                                </span>
+                              </TooltipTrigger>
+                              {!editable && (
+                                <TooltipContent
+                                  side="bottom"
+                                  className="max-w-[220px] text-center"
                                 >
-                                  <Edit2 size={12} /> Edit
-                                </Button>
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>
-                                Approved records are read-only. Click &apos;Make
-                                Draft&apos; to edit.
-                              </p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ) : (
-                        (currentNode.status === "Draft" ||
-                          !currentNode.status) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 gap-1 text-[12px] px-3"
-                            onClick={handleEdit}
-                            data-ocid="data_manager.edit_button"
-                          >
-                            <Edit2 size={12} /> Edit
-                          </Button>
-                        )
-                      )}
-                      {(currentNode.status === "Draft" ||
-                        !currentNode.status) && (
+                                  <p>{tooltip}</p>
+                                </TooltipContent>
+                              )}
+                            </Tooltip>
+                          </TooltipProvider>
+                        );
+                      })()}
+                      {/* Approve — Draft only */}
+                      {canApprove({
+                        status: (currentNode.status ?? "Draft") as
+                          | "Draft"
+                          | "Approved"
+                          | "Executed",
+                      }) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1000,7 +1375,13 @@ export default function DataManager() {
                           <Shield size={12} /> Approve
                         </Button>
                       )}
-                      {currentNode.status === "Approved" && (
+                      {/* Make Draft — Approved only */}
+                      {canMakeDraft({
+                        status: (currentNode.status ?? "Draft") as
+                          | "Draft"
+                          | "Approved"
+                          | "Executed",
+                      }) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1011,6 +1392,24 @@ export default function DataManager() {
                           <RotateCcw size={12} /> Make Draft
                         </Button>
                       )}
+                      {/* Execute — Approved only */}
+                      {canExecute({
+                        status: (currentNode.status ?? "Draft") as
+                          | "Draft"
+                          | "Approved"
+                          | "Executed",
+                      }) && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-blue-700 border-blue-300 hover:bg-blue-50"
+                          onClick={handleExecute}
+                          data-ocid="data_manager.execute_button"
+                        >
+                          <CheckCircle2 size={12} /> Execute
+                        </Button>
+                      )}
+                      {/* Validate — equipment only */}
                       {isEquipmentNode(currentNode) && (
                         <Button
                           size="sm"
@@ -1028,6 +1427,50 @@ export default function DataManager() {
               </div>
 
               <DetailErrorBoundary key={selectedId ?? "none"}>
+                {/* Executed lock banner */}
+                {currentNode.status === "Executed" && (
+                  <div className="mx-4 mt-3 flex items-start gap-2.5 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg text-[12px] text-blue-800 shrink-0">
+                    <Shield
+                      size={14}
+                      className="shrink-0 mt-0.5 text-blue-600"
+                    />
+                    <div>
+                      <p className="font-semibold">
+                        This record has been Executed and is strictly locked.
+                      </p>
+                      <p className="font-normal mt-0.5 text-blue-700">
+                        No modifications are permitted. This is a terminal
+                        state.
+                      </p>
+                    </div>
+                  </div>
+                )}
+                {/* Approved read-only warning banner */}
+                {currentNode.status === "Approved" && !editMode && (
+                  <div className="mx-4 mt-3 flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-[12px] text-amber-800 shrink-0">
+                    <AlertTriangle
+                      size={13}
+                      className="shrink-0 text-amber-600"
+                    />
+                    <span>
+                      This record is <strong>Approved</strong> and read-only.
+                      Use &apos;Make Draft&apos; to modify.
+                    </span>
+                  </div>
+                )}
+                {/* In Batch safety warning */}
+                {currentNode.isUsedInBatch && (
+                  <div className="mx-4 mt-3 flex items-center gap-2 px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg text-[12px] text-orange-800 shrink-0">
+                    <AlertTriangle
+                      size={13}
+                      className="shrink-0 text-orange-600"
+                    />
+                    <span>
+                      This record is used in an <strong>active batch</strong>{" "}
+                      and cannot be modified.
+                    </span>
+                  </div>
+                )}
                 <Tabs
                   defaultValue="basic"
                   className="flex flex-col flex-1 min-h-0"
@@ -1096,39 +1539,75 @@ export default function DataManager() {
                   >
                     <SectionHeader title="Asset Attributes" />
                     <FieldRow label="Identifier">
-                      <Input
-                        disabled={!editMode}
-                        value={
-                          editMode
-                            ? (draft?.identifier ?? currentNode.identifier)
-                            : currentNode.identifier
-                        }
-                        onChange={(e) =>
-                          setDraft(
-                            (d) => d && { ...d, identifier: e.target.value },
-                          )
-                        }
-                        className="h-7 text-[12px]"
-                        data-ocid="data_manager.identifier.input"
-                      />
+                      <div>
+                        <Input
+                          disabled={!editMode}
+                          value={
+                            editMode
+                              ? (draft?.identifier ?? currentNode.identifier)
+                              : currentNode.identifier
+                          }
+                          onChange={(e) => {
+                            setDraft(
+                              (d) => d && { ...d, identifier: e.target.value },
+                            );
+                            if (formErrors.identifier)
+                              setFormErrors((fe) => ({
+                                ...fe,
+                                identifier: "",
+                              }));
+                          }}
+                          className={cn(
+                            "h-7 text-[12px]",
+                            formErrors.identifier && "border-destructive",
+                          )}
+                          data-ocid="data_manager.identifier.input"
+                        />
+                        {formErrors.identifier && (
+                          <p
+                            className="text-[11px] text-destructive mt-0.5"
+                            data-ocid="data_manager.identifier_error"
+                          >
+                            {formErrors.identifier}
+                          </p>
+                        )}
+                      </div>
                     </FieldRow>
                     <FieldRow label="Short Description">
-                      <Input
-                        disabled={!editMode}
-                        value={
-                          editMode
-                            ? draft?.shortDescription
-                            : currentNode.shortDescription
-                        }
-                        onChange={(e) =>
-                          setDraft(
-                            (d) =>
-                              d && { ...d, shortDescription: e.target.value },
-                          )
-                        }
-                        className="h-7 text-[12px]"
-                        data-ocid="data_manager.short_description.input"
-                      />
+                      <div>
+                        <Input
+                          disabled={!editMode}
+                          value={
+                            editMode
+                              ? draft?.shortDescription
+                              : currentNode.shortDescription
+                          }
+                          onChange={(e) => {
+                            setDraft(
+                              (d) =>
+                                d && { ...d, shortDescription: e.target.value },
+                            );
+                            if (formErrors.shortDescription)
+                              setFormErrors((fe) => ({
+                                ...fe,
+                                shortDescription: "",
+                              }));
+                          }}
+                          className={cn(
+                            "h-7 text-[12px]",
+                            formErrors.shortDescription && "border-destructive",
+                          )}
+                          data-ocid="data_manager.short_description.input"
+                        />
+                        {formErrors.shortDescription && (
+                          <p
+                            className="text-[11px] text-destructive mt-0.5"
+                            data-ocid="data_manager.name_error"
+                          >
+                            {formErrors.shortDescription}
+                          </p>
+                        )}
+                      </div>
                     </FieldRow>
                     <FieldRow label="Description">
                       <Textarea
@@ -2349,7 +2828,13 @@ export default function DataManager() {
       </div>
 
       {/* NEW item dialog */}
-      <Dialog open={newDialogOpen} onOpenChange={setNewDialogOpen}>
+      <Dialog
+        open={newDialogOpen}
+        onOpenChange={(open) => {
+          setNewDialogOpen(open);
+          if (!open) setNewFormErrors({});
+        }}
+      >
         <DialogContent className="max-w-lg" data-ocid="data_manager.dialog">
           <DialogHeader>
             <DialogTitle className="text-[15px]">
@@ -2421,28 +2906,54 @@ export default function DataManager() {
               <Label className="text-[11.5px]">Identifier *</Label>
               <Input
                 value={newNode.identifier}
-                onChange={(e) =>
-                  setNewNode((n) => ({ ...n, identifier: e.target.value }))
-                }
-                className="h-8 text-[12px]"
+                onChange={(e) => {
+                  setNewNode((n) => ({ ...n, identifier: e.target.value }));
+                  if (newFormErrors.identifier)
+                    setNewFormErrors((fe) => ({ ...fe, identifier: "" }));
+                }}
+                className={cn(
+                  "h-8 text-[12px]",
+                  newFormErrors.identifier && "border-destructive",
+                )}
                 placeholder="e.g. EE-COAT-XY"
                 data-ocid="data_manager.new_identifier.input"
               />
+              {newFormErrors.identifier && (
+                <p
+                  className="text-[11px] text-destructive"
+                  data-ocid="data_manager.new_identifier_error"
+                >
+                  {newFormErrors.identifier}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-[11.5px]">Short Description *</Label>
               <Input
                 value={newNode.shortDescription}
-                onChange={(e) =>
+                onChange={(e) => {
                   setNewNode((n) => ({
                     ...n,
                     shortDescription: e.target.value,
-                  }))
-                }
-                className="h-8 text-[12px]"
+                  }));
+                  if (newFormErrors.shortDescription)
+                    setNewFormErrors((fe) => ({ ...fe, shortDescription: "" }));
+                }}
+                className={cn(
+                  "h-8 text-[12px]",
+                  newFormErrors.shortDescription && "border-destructive",
+                )}
                 placeholder="e.g. Coater_XY"
                 data-ocid="data_manager.new_short_description.input"
               />
+              {newFormErrors.shortDescription && (
+                <p
+                  className="text-[11px] text-destructive"
+                  data-ocid="data_manager.new_name_error"
+                >
+                  {newFormErrors.shortDescription}
+                </p>
+              )}
             </div>
             <div className="space-y-1">
               <Label className="text-[11.5px]">Description</Label>
@@ -2663,6 +3174,53 @@ export default function DataManager() {
               data-ocid="data_manager.make_draft_dialog.confirm_button"
             >
               <RotateCcw size={13} className="mr-1" /> Convert to Draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Execute Confirmation Dialog */}
+      <Dialog open={executeConfirmOpen} onOpenChange={setExecuteConfirmOpen}>
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.execute.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px] text-blue-700">
+              <CheckCircle2 size={16} className="text-blue-600" /> Confirm
+              Execution
+            </DialogTitle>
+            <DialogDescription className="text-sm">
+              Are you sure you want to execute this record? This will transition
+              it to
+              <strong> Executed</strong> status — a permanent, terminal state.
+              No further modifications will be permitted.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-start gap-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded-lg text-[12px] text-blue-800 my-2">
+            <Shield size={14} className="shrink-0 mt-0.5 text-blue-600" />
+            <span>
+              <strong>GMP Notice:</strong> Executed records are permanently
+              locked per 21 CFR Part 11 compliance. This action is logged in the
+              Change History audit trail.
+            </span>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setExecuteConfirmOpen(false)}
+              data-ocid="data_manager.execute.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700 text-white gap-1"
+              onClick={handleConfirmExecute}
+              data-ocid="data_manager.execute.confirm_button"
+            >
+              <CheckCircle2 size={13} /> Confirm Execution
             </Button>
           </DialogFooter>
         </DialogContent>
