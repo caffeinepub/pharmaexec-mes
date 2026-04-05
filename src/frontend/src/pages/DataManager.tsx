@@ -260,6 +260,9 @@ const EMPTY_NODE: Omit<EquipmentNode, "id" | "createdAt" | "changeHistory"> = {
   originalId: null,
   revisedById: null,
   changeControlReason: "",
+  roomId: undefined as string | undefined,
+  stationId: undefined as string | undefined,
+  subStationId: undefined as string | undefined,
 };
 
 class DetailErrorBoundary extends React.Component<
@@ -339,6 +342,8 @@ export default function DataManager() {
   const [selectedEntityType, setSelectedEntityType] = useState<
     EntityType | "all"
   >("all");
+  const [filterClass, setFilterClass] = useState<string>("all");
+  const [filterRoom, setFilterRoom] = useState<string>("all");
   const [isLoading, setIsLoading] = useState(false);
   const [validateDialogOpen, setValidateDialogOpen] = useState(false);
   const [validateResult, setValidateResult] = useState<ValidationResult | null>(
@@ -408,15 +413,25 @@ export default function DataManager() {
 
   const filtered = useMemo(
     () =>
-      nodes.filter(
-        (n) =>
-          (selectedEntityType === "all" ||
-            n.entityType === selectedEntityType) &&
-          (search.trim() === "" ||
-            n.shortDescription.toLowerCase().includes(search.toLowerCase()) ||
-            n.identifier.toLowerCase().includes(search.toLowerCase())),
-      ),
-    [nodes, selectedEntityType, search],
+      nodes.filter((n) => {
+        // Entity type filter
+        if (selectedEntityType !== "all" && n.entityType !== selectedEntityType)
+          return false;
+        // Equipment-specific sub-filters (only apply when viewing EquipmentEntity)
+        if (selectedEntityType === "EquipmentEntity") {
+          if (filterClass !== "all" && n.parentId !== filterClass) return false;
+          if (filterRoom !== "all" && n.roomId !== filterRoom) return false;
+        }
+        // Search text
+        if (
+          search.trim() !== "" &&
+          !n.shortDescription.toLowerCase().includes(search.toLowerCase()) &&
+          !n.identifier.toLowerCase().includes(search.toLowerCase())
+        )
+          return false;
+        return true;
+      }),
+    [nodes, selectedEntityType, filterClass, filterRoom, search],
   );
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -770,6 +785,7 @@ export default function DataManager() {
         manufacturer: newNode.manufacturer ?? "",
         serialNumber: newNode.serialNumber ?? "",
         stationId: newNode.stationId ?? "",
+        roomId: newNode.roomId ?? "",
       },
       effectiveEntityType,
     );
@@ -996,6 +1012,8 @@ export default function DataManager() {
 
   const handleEntityTypeChange = (type: EntityType | "all") => {
     setSelectedEntityType(type);
+    setFilterClass("all");
+    setFilterRoom("all");
     setSelectedId(null);
     setEditMode(false);
     setDraft(null);
@@ -1471,6 +1489,123 @@ export default function DataManager() {
               />
             </div>
           </div>
+
+          {/* Secondary filters — Equipment Entity only */}
+          {selectedEntityType === "EquipmentEntity" && (
+            <div className="px-4 pb-2 flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">
+                Filter:
+              </span>
+              {/* Equipment Class filter */}
+              <Select
+                value={filterClass}
+                onValueChange={(v) => {
+                  setFilterClass(v);
+                  setCurrentPage(1);
+                }}
+              >
+                <SelectTrigger
+                  className="h-7 w-44 text-[12px] bg-white"
+                  data-ocid="data_manager.filter_class.select"
+                >
+                  <SelectValue placeholder="All Classes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-[12px]">
+                    All Classes
+                  </SelectItem>
+                  {nodes
+                    .filter((n) => n.entityType === "EquipmentClass")
+                    .map((ec) => (
+                      <SelectItem
+                        key={ec.id}
+                        value={ec.id}
+                        className="text-[12px]"
+                      >
+                        {ec.shortDescription}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {/* Room filter */}
+              <Select
+                value={filterRoom}
+                onValueChange={(v) => {
+                  setFilterRoom(v);
+                  setCurrentPage(1);
+                }}
+              >
+                <SelectTrigger
+                  className="h-7 w-44 text-[12px] bg-white"
+                  data-ocid="data_manager.filter_room.select"
+                >
+                  <SelectValue placeholder="All Rooms" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-[12px]">
+                    All Rooms
+                  </SelectItem>
+                  {nodes
+                    .filter((n) => n.entityType === "Room")
+                    .map((rm) => (
+                      <SelectItem
+                        key={rm.id}
+                        value={rm.id}
+                        className="text-[12px]"
+                      >
+                        {rm.shortDescription}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {/* Active filter chips */}
+              {filterClass !== "all" && (
+                <span className="flex items-center gap-1 bg-blue-100 text-blue-800 text-[11px] font-medium px-2 py-0.5 rounded-full border border-blue-200">
+                  Class:{" "}
+                  {nodes.find((n) => n.id === filterClass)?.shortDescription}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterClass("all");
+                      setCurrentPage(1);
+                    }}
+                    className="ml-1 hover:text-blue-600"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {filterRoom !== "all" && (
+                <span className="flex items-center gap-1 bg-green-100 text-green-800 text-[11px] font-medium px-2 py-0.5 rounded-full border border-green-200">
+                  Room:{" "}
+                  {nodes.find((n) => n.id === filterRoom)?.shortDescription}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterRoom("all");
+                      setCurrentPage(1);
+                    }}
+                    className="ml-1 hover:text-green-600"
+                  >
+                    ×
+                  </button>
+                </span>
+              )}
+              {(filterClass !== "all" || filterRoom !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilterClass("all");
+                    setFilterRoom("all");
+                    setCurrentPage(1);
+                  }}
+                  className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Viewing label */}
           <div className="px-4 pt-3 pb-1 shrink-0">
@@ -2768,6 +2903,63 @@ export default function DataManager() {
                       </div>
                     </FieldRow>
 
+                    {/* Location Hierarchy — Equipment Entity & Class only */}
+                    {isEquipmentNode(currentNode) && (
+                      <>
+                        <SectionHeader title="Location" />
+                        <FieldRow label="Room">
+                          <Input
+                            readOnly
+                            value={(() => {
+                              const rid = editMode
+                                ? draft?.roomId
+                                : currentNode.roomId;
+                              if (!rid) return "— Not Set —";
+                              const room = getAllRooms().find(
+                                (r) => r.id === rid,
+                              );
+                              return room
+                                ? `${room.name} (${room.identifier})`
+                                : rid;
+                            })()}
+                            className="h-7 text-[12px] bg-muted/30"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Station">
+                          <Input
+                            readOnly
+                            value={(() => {
+                              const sid = editMode
+                                ? draft?.stationId
+                                : currentNode.stationId;
+                              if (!sid) return "— Not Set —";
+                              const sta = nodes.find((n) => n.id === sid);
+                              return sta
+                                ? `${sta.shortDescription} (${sta.identifier})`
+                                : sid;
+                            })()}
+                            className="h-7 text-[12px] bg-muted/30"
+                          />
+                        </FieldRow>
+                        <FieldRow label="Sub-Station">
+                          <Input
+                            readOnly
+                            value={(() => {
+                              const ssid = editMode
+                                ? draft?.subStationId
+                                : currentNode.subStationId;
+                              if (!ssid) return "— Not Set —";
+                              const ss = nodes.find((n) => n.id === ssid);
+                              return ss
+                                ? `${ss.shortDescription} (${ss.identifier})`
+                                : ssid;
+                            })()}
+                            className="h-7 text-[12px] bg-muted/30"
+                          />
+                        </FieldRow>
+                      </>
+                    )}
+
                     <SectionHeader title="Automation Attributes" />
                     <FieldRow label="Server name default">
                       <Input
@@ -3110,6 +3302,368 @@ export default function DataManager() {
                             AND max ≥ required_max).
                           </p>
                         </div>
+                      </>
+                    ) : isRoomNode(currentNode) ? (
+                      <>
+                        {/* ── Room Specification ────────────────────────── */}
+                        <SectionHeader title="Room Specification" />
+                        <FieldRow label="Room Type">
+                          {editMode ? (
+                            <Input
+                              value={draft?.roomType ?? ""}
+                              onChange={(e) =>
+                                setDraft(
+                                  (d) =>
+                                    d && { ...d, roomType: e.target.value },
+                                )
+                              }
+                              className="h-7 text-[12px]"
+                              placeholder="e.g. Solid Dosage, Coating"
+                            />
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              <span className="text-[12px] text-foreground">
+                                {currentNode.roomType ?? "—"}
+                              </span>
+                            </div>
+                          )}
+                        </FieldRow>
+                        <FieldRow label="Clean Room Class">
+                          {editMode ? (
+                            <Input
+                              value={draft?.roomCleanRoomClass ?? ""}
+                              onChange={(e) =>
+                                setDraft(
+                                  (d) =>
+                                    d && {
+                                      ...d,
+                                      roomCleanRoomClass: e.target.value,
+                                    },
+                                )
+                              }
+                              className="h-7 text-[12px]"
+                              placeholder="e.g. ISO 7, ISO 8, Grade B"
+                            />
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              <span className="text-[12px] text-foreground">
+                                {currentNode.roomCleanRoomClass ?? "—"}
+                              </span>
+                            </div>
+                          )}
+                        </FieldRow>
+                        <FieldRow label="Cleaning Type">
+                          {editMode ? (
+                            <Select
+                              value={draft?.roomCleaningType ?? "none"}
+                              onValueChange={(v) =>
+                                setDraft(
+                                  (d) =>
+                                    d && {
+                                      ...d,
+                                      roomCleaningType:
+                                        v === "none"
+                                          ? undefined
+                                          : (v as
+                                              | "CIP"
+                                              | "Manual"
+                                              | "Fogging"
+                                              | "None"),
+                                    },
+                                )
+                              }
+                            >
+                              <SelectTrigger className="h-7 text-[12px]">
+                                <SelectValue placeholder="— Not Set —" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem
+                                  value="none"
+                                  className="text-[12px]"
+                                >
+                                  — Not Set —
+                                </SelectItem>
+                                <SelectItem value="CIP" className="text-[12px]">
+                                  CIP (Clean-In-Place)
+                                </SelectItem>
+                                <SelectItem
+                                  value="Manual"
+                                  className="text-[12px]"
+                                >
+                                  Manual
+                                </SelectItem>
+                                <SelectItem
+                                  value="Fogging"
+                                  className="text-[12px]"
+                                >
+                                  Fogging (H₂O₂ / VHP)
+                                </SelectItem>
+                                <SelectItem
+                                  value="None"
+                                  className="text-[12px]"
+                                >
+                                  None
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              <span className="text-[12px] text-foreground">
+                                {currentNode.roomCleaningType ?? "—"}
+                              </span>
+                            </div>
+                          )}
+                        </FieldRow>
+                        <FieldRow label="Requires Cleaning">
+                          {editMode ? (
+                            <Select
+                              value={
+                                draft?.roomRequiresCleaning === true
+                                  ? "yes"
+                                  : draft?.roomRequiresCleaning === false
+                                    ? "no"
+                                    : "unset"
+                              }
+                              onValueChange={(v) =>
+                                setDraft(
+                                  (d) =>
+                                    d && {
+                                      ...d,
+                                      roomRequiresCleaning:
+                                        v === "yes"
+                                          ? true
+                                          : v === "no"
+                                            ? false
+                                            : undefined,
+                                    },
+                                )
+                              }
+                            >
+                              <SelectTrigger className="h-7 text-[12px]">
+                                <SelectValue placeholder="— Not Set —" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem
+                                  value="unset"
+                                  className="text-[12px]"
+                                >
+                                  — Not Set —
+                                </SelectItem>
+                                <SelectItem value="yes" className="text-[12px]">
+                                  Yes
+                                </SelectItem>
+                                <SelectItem value="no" className="text-[12px]">
+                                  No
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              {currentNode.roomRequiresCleaning === true ? (
+                                <span className="text-[12px] font-semibold px-2.5 py-0.5 rounded border bg-green-50 text-green-700 border-green-200">
+                                  Required
+                                </span>
+                              ) : currentNode.roomRequiresCleaning === false ? (
+                                <span className="text-[12px] font-semibold px-2.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200">
+                                  Not Required
+                                </span>
+                              ) : (
+                                <span className="text-[12px] text-muted-foreground">
+                                  Not Set
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </FieldRow>
+                        <FieldRow label="Cleaning Frequency">
+                          {editMode ? (
+                            <Input
+                              value={draft?.roomCleaningFrequency ?? ""}
+                              onChange={(e) =>
+                                setDraft(
+                                  (d) =>
+                                    d && {
+                                      ...d,
+                                      roomCleaningFrequency: e.target.value,
+                                    },
+                                )
+                              }
+                              className="h-7 text-[12px]"
+                              placeholder="e.g. After each batch, Weekly"
+                            />
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              <span className="text-[12px] text-foreground">
+                                {currentNode.roomCleaningFrequency ?? "—"}
+                              </span>
+                            </div>
+                          )}
+                        </FieldRow>
+
+                        {/* ── Room Cleaning Check ───────────────────────── */}
+                        <div className="mt-5">
+                          <SectionHeader title="Cleaning Check" />
+                        </div>
+                        {/* Cleaning Status Badge */}
+                        <FieldRow label="Cleaning Status">
+                          <div className="h-7 flex items-center gap-2">
+                            {(() => {
+                              const cs = currentNode.roomCleaningStatus;
+                              if (!cs)
+                                return (
+                                  <span className="text-[12px] text-muted-foreground">
+                                    Not Set
+                                  </span>
+                                );
+                              const styles: Record<string, string> = {
+                                Clean:
+                                  "bg-green-50 text-green-700 border-green-200",
+                                Required:
+                                  "bg-amber-50 text-amber-700 border-amber-200",
+                                Overdue:
+                                  "bg-red-50 text-red-700 border-red-200",
+                              };
+                              const icons: Record<string, string> = {
+                                Clean: "✓",
+                                Required: "⚠",
+                                Overdue: "✗",
+                              };
+                              return (
+                                <span
+                                  className={cn(
+                                    "text-[12px] font-semibold px-2.5 py-0.5 rounded border",
+                                    styles[cs] ??
+                                      "bg-muted text-muted-foreground border-border",
+                                  )}
+                                >
+                                  {icons[cs] ?? ""} {cs}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        </FieldRow>
+                        <FieldRow label="Last Cleaned At">
+                          <div className="h-7 flex items-center">
+                            <span className="text-[12px] text-foreground font-mono">
+                              {currentNode.roomLastCleanedAt
+                                ? new Date(
+                                    currentNode.roomLastCleanedAt,
+                                  ).toLocaleString("en-GB", {
+                                    day: "2-digit",
+                                    month: "short",
+                                    year: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "—"}
+                            </span>
+                          </div>
+                        </FieldRow>
+                        <FieldRow label="Cleaning Valid Till">
+                          <div className="h-7 flex items-center gap-2">
+                            <span className="text-[12px] text-foreground font-mono">
+                              {currentNode.roomCleaningValidTill
+                                ? new Date(
+                                    currentNode.roomCleaningValidTill,
+                                  ).toLocaleString("en-GB", {
+                                    day: "2-digit",
+                                    month: "short",
+                                    year: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "—"}
+                            </span>
+                            {currentNode.roomCleaningValidTill &&
+                              (() => {
+                                const now = new Date();
+                                const validTill = new Date(
+                                  currentNode.roomCleaningValidTill!,
+                                );
+                                const daysLeft = Math.ceil(
+                                  (validTill.getTime() - now.getTime()) /
+                                    (1000 * 60 * 60 * 24),
+                                );
+                                if (daysLeft < 0)
+                                  return (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-200">
+                                      EXPIRED
+                                    </span>
+                                  );
+                                if (daysLeft <= 7)
+                                  return (
+                                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">
+                                      {daysLeft}d left
+                                    </span>
+                                  );
+                                return (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded border bg-green-50 text-green-700 border-green-200">
+                                    {daysLeft}d left
+                                  </span>
+                                );
+                              })()}
+                          </div>
+                        </FieldRow>
+                        <FieldRow label="Last Product Used">
+                          <div className="h-7 flex items-center">
+                            <span className="text-[12px] text-foreground">
+                              {currentNode.roomLastProduct ?? "—"}
+                            </span>
+                          </div>
+                        </FieldRow>
+                        <FieldRow label="Cleaning Level">
+                          <div className="h-7 flex items-center">
+                            {(() => {
+                              const cl = currentNode.roomCleaningLevel;
+                              if (!cl)
+                                return (
+                                  <span className="text-[12px] text-muted-foreground">
+                                    Not Set
+                                  </span>
+                                );
+                              const styles: Record<string, string> = {
+                                None: "bg-gray-50 text-gray-500 border-gray-200",
+                                Minor:
+                                  "bg-blue-50 text-blue-700 border-blue-200",
+                                Major:
+                                  "bg-purple-50 text-purple-700 border-purple-200",
+                              };
+                              return (
+                                <span
+                                  className={cn(
+                                    "text-[12px] font-semibold px-2.5 py-0.5 rounded border",
+                                    styles[cl] ??
+                                      "bg-muted text-muted-foreground border-border",
+                                  )}
+                                >
+                                  {cl}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        </FieldRow>
+                        {/* Cleaning Required banner if status is not Clean */}
+                        {currentNode.roomCleaningStatus &&
+                          currentNode.roomCleaningStatus !== "Clean" && (
+                            <div
+                              className={cn(
+                                "mt-4 flex items-start gap-2 p-3 rounded-lg border text-[12px]",
+                                currentNode.roomCleaningStatus === "Overdue"
+                                  ? "bg-red-50 border-red-200 text-red-800"
+                                  : "bg-amber-50 border-amber-200 text-amber-800",
+                              )}
+                            >
+                              <AlertTriangle
+                                size={14}
+                                className="shrink-0 mt-0.5"
+                              />
+                              <span>
+                                {currentNode.roomCleaningStatus === "Overdue"
+                                  ? "Room cleaning is overdue. Execution is blocked until cleaning is completed and status is updated."
+                                  : "Room cleaning is required before the next batch execution. Schedule cleaning with the facility team."}
+                              </span>
+                            </div>
+                          )}
                       </>
                     ) : (
                       <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
@@ -4477,6 +5031,155 @@ export default function DataManager() {
                 )}
               </div>
             </div>
+            {/* Hierarchy selectors — Equipment Entity & Class only */}
+            {(newNode.entityType === "EquipmentEntity" ||
+              newNode.entityType === "EquipmentClass") && (
+              <div className="space-y-3 border-t pt-3 mt-1">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  Location Hierarchy
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <RequiredLabel
+                      label="Room"
+                      required={isFieldRequired(
+                        newNode.entityType as EntityType,
+                        "roomId",
+                      )}
+                      className="text-[11.5px]"
+                    />
+                    <Select
+                      value={newNode.roomId ?? "none"}
+                      onValueChange={(v) =>
+                        setNewNode((n) => ({
+                          ...n,
+                          roomId: v === "none" ? undefined : v,
+                          stationId: undefined,
+                          subStationId: undefined,
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-[12px]">
+                        <SelectValue placeholder="— Select Room —" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none" className="text-[12px]">
+                          — Not Set —
+                        </SelectItem>
+                        {getAllRooms().map((room) => (
+                          <SelectItem
+                            key={room.id}
+                            value={room.id}
+                            className="text-[12px]"
+                          >
+                            {room.name} ({room.identifier})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {newFormErrors.roomId && (
+                      <p className="text-[11px] text-destructive mt-0.5">
+                        {newFormErrors.roomId}
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    <RequiredLabel
+                      label="Station"
+                      required={isFieldRequired(
+                        newNode.entityType as EntityType,
+                        "stationId",
+                      )}
+                      className="text-[11.5px]"
+                    />
+                    <Select
+                      value={newNode.stationId ?? "none"}
+                      onValueChange={(v) =>
+                        setNewNode((n) => ({
+                          ...n,
+                          stationId: v === "none" ? undefined : v,
+                          subStationId: undefined,
+                        }))
+                      }
+                    >
+                      <SelectTrigger className="h-8 text-[12px]">
+                        <SelectValue placeholder="— Select Station —" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none" className="text-[12px]">
+                          — Not Set —
+                        </SelectItem>
+                        {nodes
+                          .filter((n) => n.entityType === "Station")
+                          .map((sta) => (
+                            <SelectItem
+                              key={sta.id}
+                              value={sta.id}
+                              className="text-[12px]"
+                            >
+                              {sta.shortDescription} ({sta.identifier})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                    {newFormErrors.stationId && (
+                      <p className="text-[11px] text-destructive mt-0.5">
+                        {newFormErrors.stationId}
+                      </p>
+                    )}
+                  </div>
+                </div>
+                {/* Sub-Station — filtered by selected station */}
+                <div className="space-y-1">
+                  <Label className="text-[11.5px]">
+                    Sub-Station{" "}
+                    <span className="text-muted-foreground font-normal">
+                      (optional)
+                    </span>
+                  </Label>
+                  <Select
+                    value={newNode.subStationId ?? "none"}
+                    disabled={!newNode.stationId}
+                    onValueChange={(v) =>
+                      setNewNode((n) => ({
+                        ...n,
+                        subStationId: v === "none" ? undefined : v,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="h-8 text-[12px]">
+                      <SelectValue
+                        placeholder={
+                          newNode.stationId
+                            ? "— Not Set —"
+                            : "Select Station first"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none" className="text-[12px]">
+                        — Not Set —
+                      </SelectItem>
+                      {nodes
+                        .filter(
+                          (n) =>
+                            n.entityType === "SubStation" &&
+                            n.parentId === newNode.stationId,
+                        )
+                        .map((ss) => (
+                          <SelectItem
+                            key={ss.id}
+                            value={ss.id}
+                            className="text-[12px]"
+                          >
+                            {ss.shortDescription} ({ss.identifier})
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
           </div>
           <Separator />
           <DialogFooter className="gap-2">

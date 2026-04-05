@@ -19,6 +19,7 @@ export const ENTITY_REQUIRED_FIELDS: Record<EntityType, string[]> = {
   EquipmentEntity: [
     "identifier",
     "shortDescription",
+    "roomId",
     "stationId",
     "manufacturer",
     "serialNumber",

@@ -138,6 +138,17 @@ export interface EquipmentNode {
   // Specification simplified fields
   cleaningType?: "CIP" | "Manual" | "None";
   requiresCleaning?: boolean;
+  // Room-specific cleaning & specification fields
+  roomCleaningStatus?: "Clean" | "Required" | "Overdue";
+  roomLastCleanedAt?: string; // ISO date
+  roomCleaningValidTill?: string; // ISO date
+  roomLastProduct?: string; // last product processed in room
+  roomCleaningLevel?: "None" | "Minor" | "Major";
+  roomCleaningType?: "CIP" | "Manual" | "Fogging" | "None";
+  roomRequiresCleaning?: boolean;
+  roomCleanRoomClass?: string; // e.g. "ISO 7", "ISO 8"
+  roomType?: string; // e.g. "Solid Dosage", "Coating", "Granulation"
+  roomCleaningFrequency?: string; // e.g. "After each batch", "Weekly"
   // New tracking structures
   logbookEntries?: LogbookEntry[];
   statusHistory?: StatusHistoryEntry[];
@@ -1146,6 +1157,16 @@ export const INITIAL_DATA: EquipmentNode[] = [
     createdAt: "2024-01-01T08:00:00Z",
     changeHistory: [],
     status: "Approved",
+    roomCleaningStatus: "Clean",
+    roomLastCleanedAt: "2026-03-20T09:00:00Z",
+    roomCleaningValidTill: "2026-04-20T09:00:00Z",
+    roomLastProduct: "AMOX-500",
+    roomCleaningLevel: "Major",
+    roomCleaningType: "CIP",
+    roomRequiresCleaning: true,
+    roomCleanRoomClass: "ISO 8",
+    roomType: "Solid Dosage",
+    roomCleaningFrequency: "After each batch",
     logbookEntries: [
       {
         id: "lb-rm1-1",
@@ -1235,6 +1256,16 @@ export const INITIAL_DATA: EquipmentNode[] = [
     createdAt: "2024-01-01T08:00:00Z",
     changeHistory: [],
     status: "Approved",
+    roomCleaningStatus: "Required",
+    roomLastCleanedAt: "2026-03-06T10:00:00Z",
+    roomCleaningValidTill: "2026-03-31T10:00:00Z",
+    roomLastProduct: "MET-850",
+    roomCleaningLevel: "Major",
+    roomCleaningType: "Fogging",
+    roomRequiresCleaning: true,
+    roomCleanRoomClass: "ISO 7",
+    roomType: "Coating & Granulation",
+    roomCleaningFrequency: "After each batch",
     logbookEntries: [
       {
         id: "lb-rm2-1",
