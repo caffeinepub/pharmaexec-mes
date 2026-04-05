@@ -68,6 +68,7 @@ import {
   PlayCircle,
   Sparkles,
   StopCircle,
+  Unlink,
 } from "lucide-react";
 import React, {
   useCallback,
@@ -132,6 +133,7 @@ import {
   validateIdentifierFormat,
   validateIdentifierUniqueness,
 } from "../services/identifierService";
+import { isBatchActive, unbindFromBatch } from "../services/unbindService";
 import {
   canApprove,
   canDelete,
@@ -399,6 +401,15 @@ export default function DataManager() {
   // Identifier format error for new dialog
   const [identifierFormatError, setIdentifierFormatError] = useState("");
 
+  // Unbind from batch dialog
+  const [unbindDialogOpen, setUnbindDialogOpen] = useState(false);
+  const [unbindReason, setUnbindReason] = useState("");
+  const [unbindOverride, setUnbindOverride] = useState(false);
+  // Perform Cleaning dialog
+  const [performCleaningDialogOpen, setPerformCleaningDialogOpen] =
+    useState(false);
+  const [performCleaningReason, setPerformCleaningReason] = useState("");
+
   // Auto-generate identifier when new dialog opens or entity type changes
   const nodesRef = useRef(nodes);
   nodesRef.current = nodes;
@@ -594,17 +605,78 @@ export default function DataManager() {
           };
         }
       }
-      const allChanges = campaignResetEntry
-        ? [...changes, campaignResetEntry]
-        : changes;
       const savedDraft = campaignResetEntry
         ? { ...draft, currentCampaignBatches: 0 }
         : draft;
+      // ── Cleaning status recalculation on save ──────────────────────────────
+      const cleaningTriggerFields: (keyof EquipmentNode)[] = [
+        "lastProductUsed",
+        "cleaningReason",
+        "currentCampaignBatches",
+        "lastCleanedAt",
+      ];
+      const cleaningTriggerChanged = prev
+        ? cleaningTriggerFields.some(
+            (f) => String(prev[f] ?? "") !== String(savedDraft[f] ?? ""),
+          )
+        : false;
+
+      let finalDraft = savedDraft;
+      const cleaningRecalcEntries: ChangeEntry[] = [];
+
+      if (cleaningTriggerChanged && isEquipmentNode(savedDraft)) {
+        const newBadge = computeCleaningBadge({
+          equipmentId: savedDraft.id,
+          equipmentType: savedDraft.equipmentType,
+          lastCleanedAt: savedDraft.lastCleanedAt,
+          cleaningValidTill: savedDraft.cleaningValidTill,
+          lastProductUsed: savedDraft.lastProductUsed,
+          cleaningReason: savedDraft.cleaningReason,
+          currentCampaignBatches: savedDraft.currentCampaignBatches,
+        });
+        let newValidTill = savedDraft.cleaningValidTill;
+        if (savedDraft.lastCleanedAt && savedDraft.lastProductUsed) {
+          newValidTill = computeCleaningValidTill(
+            savedDraft.lastCleanedAt,
+            savedDraft.lastProductUsed,
+          );
+        }
+        if (newBadge !== (savedDraft.cleaningStatus ?? "Due")) {
+          cleaningRecalcEntries.push({
+            timestamp: now,
+            field: "cleaningStatus",
+            oldValue: savedDraft.cleaningStatus ?? "Due",
+            newValue: newBadge,
+            changedBy: CURRENT_USER,
+            reason: "Auto-recalculated on save",
+          });
+        }
+        if (newValidTill !== savedDraft.cleaningValidTill) {
+          cleaningRecalcEntries.push({
+            timestamp: now,
+            field: "cleaningValidTill",
+            oldValue: savedDraft.cleaningValidTill ?? "",
+            newValue: newValidTill ?? "",
+            changedBy: CURRENT_USER,
+            reason: "Auto-recalculated on save",
+          });
+        }
+        finalDraft = {
+          ...savedDraft,
+          cleaningStatus: newBadge,
+          cleaningValidTill: newValidTill,
+        };
+      }
+
+      const allChanges = [
+        ...(campaignResetEntry ? [...changes, campaignResetEntry] : changes),
+        ...cleaningRecalcEntries,
+      ];
       setNodes((prevNodes) =>
         prevNodes.map((n) =>
           n.id === draft.id
             ? {
-                ...savedDraft,
+                ...finalDraft,
                 updatedAt: now,
                 changeHistory: [...draft.changeHistory, ...allChanges],
               }
@@ -898,6 +970,44 @@ export default function DataManager() {
     } catch (err) {
       toast.error("Something went wrong. Please try again");
       console.error(err);
+    }
+  };
+
+  // ── Unbind from Batch ──────────────────────────────────────────────────────
+  const handleUnbind = () => {
+    setUnbindReason("");
+    setUnbindOverride(false);
+    setUnbindDialogOpen(true);
+  };
+
+  const handleConfirmUnbind = () => {
+    if (!currentNode || !currentNode.currentBatchId) return;
+    try {
+      const result = unbindFromBatch({
+        node: currentNode,
+        batchId: currentNode.currentBatchId,
+        reason: unbindReason,
+        user: "MES Operator",
+        isActiveBatch: isBatchActive(currentNode.currentBatchStatus),
+        override: unbindOverride,
+      });
+      if (!result.success) {
+        toast.error(result.error ?? "Unbind failed.");
+        return;
+      }
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === result.updatedNode.id ? result.updatedNode : n,
+        ),
+      );
+      setUnbindDialogOpen(false);
+      setUnbindReason("");
+      setUnbindOverride(false);
+      toast.success(
+        `${currentNode.identifier} unbound from batch ${currentNode.currentBatchId}.`,
+      );
+    } catch (_err) {
+      toast.error("Something went wrong. Please try again.");
     }
   };
 
@@ -1217,6 +1327,105 @@ export default function DataManager() {
       );
       setCleaningEventDialogOpen(false);
       toast.success("Cleaning event logged");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
+  };
+
+  const handlePerformCleaning = () => {
+    const node = selected;
+    if (!node) return;
+    if (!performCleaningReason.trim()) {
+      toast.error("Cleaning reason is required");
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      const newLastCleanedAt = now;
+      const newCampaignBatches = 0;
+      const newValidTill = node.lastProductUsed
+        ? computeCleaningValidTill(newLastCleanedAt, node.lastProductUsed)
+        : new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      const newBadge = computeCleaningBadge({
+        equipmentId: node.id,
+        equipmentType: node.equipmentType,
+        lastCleanedAt: newLastCleanedAt,
+        cleaningValidTill: newValidTill,
+        lastProductUsed: node.lastProductUsed,
+        cleaningReason: performCleaningReason,
+        currentCampaignBatches: newCampaignBatches,
+      });
+      logCleaningEvent({
+        equipmentId: node.id,
+        equipmentIdentifier: node.identifier,
+        cleanedBy: CURRENT_USER,
+        cleaningReason: performCleaningReason,
+        productCode: node.lastProductUsed ?? "",
+        cleanedAt: now,
+        validTill: newValidTill,
+      });
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === node.id
+            ? {
+                ...n,
+                lastCleanedAt: newLastCleanedAt,
+                currentCampaignBatches: newCampaignBatches,
+                cleaningStatus: newBadge,
+                cleaningValidTill: newValidTill,
+                cleaningReason: performCleaningReason,
+                updatedAt: now,
+                logbookEntries: [
+                  ...(n.logbookEntries ?? []),
+                  {
+                    id: `lb-clean-${Date.now()}`,
+                    entityType: "Equipment" as const,
+                    entityIdentifier: n.identifier,
+                    action: "Cleaning" as const,
+                    timestamp: now,
+                    user: CURRENT_USER,
+                    reason: performCleaningReason,
+                    statusChange: `${n.cleaningStatus ?? "Due"} → ${newBadge}`,
+                  },
+                ],
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "cleaningStatus",
+                    oldValue: n.cleaningStatus ?? "Due",
+                    newValue: newBadge,
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: `Perform Cleaning: ${performCleaningReason}`,
+                  },
+                  {
+                    timestamp: now,
+                    field: "lastCleanedAt",
+                    oldValue: n.lastCleanedAt ?? "—",
+                    newValue: newLastCleanedAt,
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: `Perform Cleaning: ${performCleaningReason}`,
+                  },
+                  {
+                    timestamp: now,
+                    field: "currentCampaignBatches",
+                    oldValue: String(n.currentCampaignBatches ?? 0),
+                    newValue: "0",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: `Perform Cleaning: ${performCleaningReason}`,
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setPerformCleaningDialogOpen(false);
+      setPerformCleaningReason("");
+      toast.success(`Cleaning performed. Status updated to ${newBadge}.`);
     } catch (err) {
       toast.error("Something went wrong. Please try again");
       console.error(err);
@@ -2471,6 +2680,18 @@ export default function DataManager() {
                           <Copy size={12} /> Copy as Draft
                         </Button>
                       )}
+                      {/* Unbind from Batch — visible when entity is bound to a batch */}
+                      {currentNode.currentBatchId && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-orange-700 border-orange-300 hover:bg-orange-50"
+                          onClick={handleUnbind}
+                          data-ocid="data_manager.unbind_button"
+                        >
+                          <Unlink size={12} /> Unbind from Batch
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -2549,7 +2770,7 @@ export default function DataManager() {
                     return (
                       <div
                         className={cn(
-                          "mx-4 mt-3 flex items-start gap-2 px-3 py-2 rounded-lg text-[12px] shrink-0 border",
+                          "mx-4 mt-3 flex items-start gap-2 flex-wrap px-3 py-2 rounded-lg text-[12px] shrink-0 border",
                           cb === "Expired"
                             ? "bg-red-50 border-red-200 text-red-800"
                             : "bg-amber-50 border-amber-200 text-amber-800",
@@ -2572,6 +2793,20 @@ export default function DataManager() {
                             ? "Cleaning validity has expired. Cleaning required before execution."
                             : "Cleaning validity expires soon. Schedule cleaning before next execution."}
                         </span>
+                        {!editMode && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-6 ml-auto gap-1 text-[11px] shrink-0 border-current text-inherit hover:bg-white/40"
+                            onClick={() => {
+                              setPerformCleaningReason("");
+                              setPerformCleaningDialogOpen(true);
+                            }}
+                            data-ocid="data_manager.perform_cleaning_banner_button"
+                          >
+                            <Sparkles size={11} /> Perform Cleaning
+                          </Button>
+                        )}
                       </div>
                     );
                   })()}
@@ -4029,6 +4264,22 @@ export default function DataManager() {
                             );
                           })()}
                         </FieldRow>
+                        {!editMode && isEquipmentNode(currentNode) && (
+                          <div className="mt-3 flex">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1.5 text-[12px] text-teal-700 border-teal-300 hover:bg-teal-50"
+                              onClick={() => {
+                                setPerformCleaningReason("");
+                                setPerformCleaningDialogOpen(true);
+                              }}
+                              data-ocid="data_manager.spec_perform_cleaning_button"
+                            >
+                              <Sparkles size={13} /> Perform Cleaning
+                            </Button>
+                          </div>
+                        )}
                       </>
                     ) : (
                       <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
@@ -4200,6 +4451,7 @@ export default function DataManager() {
                                   "Pause",
                                   "Resume",
                                   "Status Change",
+                                  "Unbind",
                                 ] as EquipmentLogbookAction[]
                               ).map((action) => {
                                 const count =
@@ -4312,6 +4564,18 @@ export default function DataManager() {
                                       />
                                     ),
                                   },
+                                  Unbind: {
+                                    bg: "bg-orange-50",
+                                    border: "border-l-orange-500",
+                                    badge:
+                                      "bg-orange-100 text-orange-700 border-orange-200",
+                                    icon: (
+                                      <Unlink
+                                        size={14}
+                                        className="text-orange-600 shrink-0"
+                                      />
+                                    ),
+                                  },
                                 };
                                 const config = actionConfig[
                                   entry.action as EquipmentLogbookAction
@@ -4403,6 +4667,7 @@ export default function DataManager() {
                                   "Room Cleaning",
                                   "Line Clearance",
                                   "Area Status Change",
+                                  "Unbind",
                                 ] as RoomLogbookAction[]
                               ).map((action) => {
                                 const count =
@@ -4476,6 +4741,18 @@ export default function DataManager() {
                                       <History
                                         size={14}
                                         className="text-amber-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  Unbind: {
+                                    bg: "bg-orange-50",
+                                    border: "border-l-orange-500",
+                                    badge:
+                                      "bg-orange-100 text-orange-700 border-orange-200",
+                                    icon: (
+                                      <Unlink
+                                        size={14}
+                                        className="text-orange-600 shrink-0"
                                       />
                                     ),
                                   },
@@ -5918,6 +6195,112 @@ export default function DataManager() {
         </DialogContent>
       </Dialog>
 
+      {/* Unbind from Batch Dialog */}
+      <Dialog open={unbindDialogOpen} onOpenChange={setUnbindDialogOpen}>
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.unbind.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <Unlink size={15} className="text-orange-600" /> Unbind from Batch
+            </DialogTitle>
+            <DialogDescription className="text-[12px]">
+              Release this entity from its current batch assignment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            {/* Batch info */}
+            {currentNode?.currentBatchId && (
+              <div className="flex items-start gap-2 px-3 py-2.5 bg-orange-50 border border-orange-200 rounded-lg text-[12px] text-orange-800">
+                <AlertTriangle
+                  size={13}
+                  className="shrink-0 mt-0.5 text-orange-600"
+                />
+                <span>
+                  This entity is currently bound to batch{" "}
+                  <strong>{currentNode.currentBatchId}</strong> (
+                  {currentNode.currentBatchStatus ?? "Unknown status"}).
+                </span>
+              </div>
+            )}
+            {/* Active batch warning */}
+            {currentNode?.currentBatchId &&
+              isBatchActive(currentNode.currentBatchStatus) && (
+                <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-800">
+                  <AlertTriangle
+                    size={13}
+                    className="shrink-0 mt-0.5 text-red-600"
+                  />
+                  <span>
+                    <strong>Batch is active.</strong> Supervisor override is
+                    required to unbind during active execution.
+                  </span>
+                </div>
+              )}
+            {/* Reason input */}
+            <div className="space-y-1.5">
+              <RequiredLabel
+                label="Reason for Unbind"
+                required
+                htmlFor="unbind-reason"
+                className="text-[12px]"
+              />
+              <Textarea
+                id="unbind-reason"
+                value={unbindReason}
+                onChange={(e) => setUnbindReason(e.target.value)}
+                placeholder="e.g. Batch completed, releasing equipment for next campaign..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.unbind.reason_textarea"
+              />
+            </div>
+            {/* Override checkbox — only shown when batch is active */}
+            {currentNode?.currentBatchId &&
+              isBatchActive(currentNode.currentBatchStatus) && (
+                <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+                  <Checkbox
+                    id="unbind-override"
+                    checked={unbindOverride}
+                    onCheckedChange={(v) => setUnbindOverride(v === true)}
+                    data-ocid="data_manager.unbind.override_checkbox"
+                  />
+                  <label
+                    htmlFor="unbind-override"
+                    className="text-[12px] text-amber-800 font-medium cursor-pointer"
+                  >
+                    Supervisor Override — I acknowledge this batch is active
+                  </label>
+                </div>
+              )}
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setUnbindDialogOpen(false)}
+              data-ocid="data_manager.unbind.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1 bg-orange-600 hover:bg-orange-700 text-white"
+              onClick={handleConfirmUnbind}
+              disabled={
+                !unbindReason.trim() ||
+                (isBatchActive(currentNode?.currentBatchStatus) &&
+                  !unbindOverride)
+              }
+              data-ocid="data_manager.unbind.confirm_button"
+            >
+              <Unlink size={13} /> Unbind from Batch
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Override Interlock Reason Dialog */}
       <Dialog
         open={overrideReasonDialogOpen}
@@ -6092,6 +6475,59 @@ export default function DataManager() {
               data-ocid="data_manager.cleaning_event.confirm_button"
             >
               <ClipboardList size={13} /> Log Cleaning Event
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Perform Cleaning Dialog */}
+      <Dialog
+        open={performCleaningDialogOpen}
+        onOpenChange={setPerformCleaningDialogOpen}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-[14px] flex items-center gap-2">
+              <Sparkles size={15} className="text-teal-600" />
+              Perform Cleaning
+            </DialogTitle>
+            <DialogDescription className="text-[12px]">
+              This will reset Last Cleaned At to now and Current Campaign
+              Batches to 0, then recalculate cleaning status.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <label
+              htmlFor="pc-reason"
+              className="text-[12px] font-medium text-foreground mb-1.5 block"
+            >
+              Cleaning Reason <span className="text-destructive">*</span>
+            </label>
+            <Textarea
+              id="pc-reason"
+              className="text-[12px] min-h-[70px]"
+              placeholder="e.g. Post-batch cleaning, Product changeover..."
+              value={performCleaningReason}
+              onChange={(e) => setPerformCleaningReason(e.target.value)}
+            />
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[12px]"
+              onClick={() => setPerformCleaningDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-[12px] bg-teal-600 hover:bg-teal-700 text-white"
+              onClick={handlePerformCleaning}
+              disabled={!performCleaningReason.trim()}
+              data-ocid="data_manager.perform_cleaning_confirm_button"
+            >
+              <Sparkles size={12} /> Confirm Cleaning
             </Button>
           </DialogFooter>
         </DialogContent>

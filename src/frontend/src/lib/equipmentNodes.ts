@@ -40,12 +40,14 @@ export type EquipmentLogbookAction =
   | "Cleaning"
   | "Pause"
   | "Resume"
-  | "Status Change";
+  | "Status Change"
+  | "Unbind";
 
 export type RoomLogbookAction =
   | "Room Cleaning"
   | "Line Clearance"
-  | "Area Status Change";
+  | "Area Status Change"
+  | "Unbind";
 
 export type LogbookAction = EquipmentLogbookAction | RoomLogbookAction;
 
@@ -134,6 +136,7 @@ export interface EquipmentNode {
   currentBatchId?: string;
   currentBatchStatus?: string;
   lastBatch?: string;
+  previousContext?: string; // stores the previous batch context
   lastExecutionDate?: string;
   // Specification simplified fields
   cleaningType?: "CIP" | "Manual" | "None";
