@@ -1,5 +1,6 @@
 // GMP Validation Engine — PharmaExec MES
 // Central validation utilities for GMP compliance checks
+import { validateCleaningForExecution as _validateCleaning } from "../services/cleaningValidationService";
 
 // Updated: Added 'Executed' to GmpStatus as a terminal workflow state.
 export type GmpStatus = "Draft" | "Approved" | "Executed" | "Superseded";
@@ -8,6 +9,7 @@ export type HealthStatus = "Good" | "Bad";
 export type CleaningLevel = "None" | "Minor" | "Major";
 export type PmStatus = "On Time" | "Due Soon" | "Overdue";
 export type ComparisonType = "WITHIN_RANGE" | "COVER_RANGE";
+export type EquipmentType = "Fixed" | "Moveable";
 
 export interface CleaningRule {
   id: string;
@@ -20,6 +22,7 @@ export interface CleaningLogEntry {
   lastProduct: string;
   lastCleanedDate: string;
   cleaningLevel: CleaningLevel;
+  cleaningReason?: string; // Required for Fixed equipment cleaning validity
 }
 
 export interface ValidationResult {
@@ -91,31 +94,32 @@ export function computeCleaningStatus(
 /**
  * computeEquipmentIndicator: Returns overall card color indicator.
  * Red if: maintenance_status === "Under Maintenance" OR pmStatus === "Overdue"
- *         OR health_status === "Bad" OR cleaningStatus === "Required"
- * Yellow if: pmStatus === "Due Soon"
+ *         OR health_status === "Bad" OR cleaningStatus === "Required"/"Expired"
+ * Yellow if: pmStatus === "Due Soon" OR cleaningStatus === "Due"
  * Green if: all OK
  */
 export function computeEquipmentIndicator(
   maintenanceStatus: MaintenanceStatus,
   healthStatus: HealthStatus,
   pmStatus: PmStatus,
-  cleaningStatus: "OK" | "Required",
+  cleaningStatus: "OK" | "Required" | "Clean" | "Due" | "Expired",
 ): "green" | "yellow" | "red" {
   if (
     maintenanceStatus === "Under Maintenance" ||
     pmStatus === "Overdue" ||
     healthStatus === "Bad" ||
-    cleaningStatus === "Required"
+    cleaningStatus === "Required" ||
+    cleaningStatus === "Expired"
   ) {
     return "red";
   }
-  if (pmStatus === "Due Soon") return "yellow";
+  if (pmStatus === "Due Soon" || cleaningStatus === "Due") return "yellow";
   return "green";
 }
 
 /**
  * validateExecution: Central GMP validation for execution blocking.
- * Checks all 7 GMP conditions.
+ * Checks all GMP conditions including new cleaning validation service.
  */
 export function validateExecution(params: {
   equipment: {
@@ -125,12 +129,20 @@ export function validateExecution(params: {
     pm_due_date: string;
     cleaningLog: CleaningLogEntry | null;
     cleaningRules: CleaningRule[];
+    // New fields for advanced cleaning validation
+    equipmentType?: EquipmentType;
+    lastCleanedAt?: string;
+    cleaningValidTill?: string;
+    lastProductUsed?: string;
+    cleaningReason?: string;
+    currentCampaignBatches?: number;
   } | null;
   equipmentId: string;
+  targetProductCode?: string;
 }): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
-  const { equipment, equipmentId } = params;
+  const { equipment, equipmentId, targetProductCode } = params;
 
   // Check 1: Equipment must exist and be Approved
   if (!equipment) {
@@ -170,19 +182,38 @@ export function validateExecution(params: {
     );
   }
 
-  // Check 5: Cleaning requirement
-  const cleaningStatus = computeCleaningStatus(
-    equipment.cleaningLog,
-    equipment.cleaningRules,
-  );
-  if (cleaningStatus === "Required") {
-    errors.push(
-      "Equipment requires cleaning before execution based on cleaning rules.",
+  // Check 5: Advanced cleaning validation (service layer)
+  if (
+    equipment.lastCleanedAt ||
+    equipment.cleaningValidTill ||
+    equipment.lastProductUsed
+  ) {
+    const cleaningResult = _validateCleaning(
+      {
+        equipmentId,
+        equipmentType: equipment.equipmentType,
+        lastCleanedAt: equipment.lastCleanedAt,
+        cleaningValidTill: equipment.cleaningValidTill,
+        lastProductUsed: equipment.lastProductUsed,
+        cleaningReason: equipment.cleaningReason,
+        currentCampaignBatches: equipment.currentCampaignBatches,
+      },
+      targetProductCode,
     );
+    errors.push(...cleaningResult.reasons);
+    warnings.push(...cleaningResult.warnings);
+  } else {
+    // Fallback to legacy cleaning check for older records
+    const cleaningStatus = computeCleaningStatus(
+      equipment.cleaningLog,
+      equipment.cleaningRules,
+    );
+    if (cleaningStatus === "Required") {
+      errors.push(
+        "Equipment requires cleaning before execution based on cleaning rules.",
+      );
+    }
   }
-
-  // Check 6: Required properties exist (basic check — cleaningRules defined)
-  // Advanced property range checks would be done here with recipe data
 
   return {
     success: errors.length === 0,

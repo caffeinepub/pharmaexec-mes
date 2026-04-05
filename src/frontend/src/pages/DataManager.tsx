@@ -91,6 +91,22 @@ import {
   computePmStatus,
   validateExecution,
 } from "../lib/gmpValidation";
+import { getAllRooms } from "../lib/locationHierarchy";
+import {
+  type ProductMaster,
+  approveProduct,
+  createProduct,
+  deleteProduct,
+  getAllProducts,
+  getProductByCode,
+  updateProduct,
+} from "../lib/productMaster";
+import {
+  type CleaningBadge,
+  computeCleaningBadge,
+  computeCleaningValidTill,
+  getCleaningBadgeStyle,
+} from "../services/cleaningValidationService";
 import {
   canApprove,
   canDelete,
@@ -121,10 +137,13 @@ const _PRODUCTS = [
 
 const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
   WorkCenter: "Work Center",
+  Room: "Room",
   Station: "Station",
+  SubStation: "Sub-Station",
   EquipmentClass: "Equipment Class",
   EquipmentEntity: "Equipment Entity",
   PropertyType: "Property Type",
+  ProductMaster: "Product Master",
 };
 
 const ENTITY_COLORS: Record<
@@ -136,10 +155,20 @@ const ENTITY_COLORS: Record<
     badge: "bg-rose-100 text-rose-700 border-rose-200",
     border: "border-l-rose-400",
   },
+  Room: {
+    bg: "bg-sky-50",
+    badge: "bg-sky-100 text-sky-700 border-sky-200",
+    border: "border-l-sky-400",
+  },
   Station: {
     bg: "bg-amber-50",
     badge: "bg-amber-100 text-amber-700 border-amber-200",
     border: "border-l-amber-400",
+  },
+  SubStation: {
+    bg: "bg-orange-50",
+    badge: "bg-orange-100 text-orange-700 border-orange-200",
+    border: "border-l-orange-400",
   },
   EquipmentClass: {
     bg: "bg-gray-50",
@@ -155,6 +184,11 @@ const ENTITY_COLORS: Record<
     bg: "bg-indigo-50",
     badge: "bg-indigo-100 text-indigo-700 border-indigo-200",
     border: "border-l-indigo-400",
+  },
+  ProductMaster: {
+    bg: "bg-violet-50",
+    badge: "bg-violet-100 text-violet-700 border-violet-200",
+    border: "border-l-violet-400",
   },
 };
 
@@ -386,6 +420,30 @@ export default function DataManager() {
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveConfirmReason, setSaveConfirmReason] = useState("");
   const [makeDraftConfirmOpen, setMakeDraftConfirmOpen] = useState(false);
+
+  // ── Product Master state ──────────────────────────────────────────────
+  const [products, setProducts] = useState<ProductMaster[]>(() =>
+    getAllProducts(),
+  );
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(
+    null,
+  );
+  const [productEditMode, setProductEditMode] = useState(false);
+  const [productDraft, setProductDraft] = useState<ProductMaster | null>(null);
+  const [productSaveConfirmOpen, setProductSaveConfirmOpen] = useState(false);
+  const [productSaveReason, setProductSaveReason] = useState("");
+  const [newProductDialogOpen, setNewProductDialogOpen] = useState(false);
+  const [newProduct, setNewProduct] = useState({
+    productCode: "",
+    productName: "",
+    description: "",
+    campaignLength: 5,
+    dethTime: 48,
+    status: "Draft" as "Draft" | "Approved" | "Executed",
+    updatedAt: new Date().toISOString(),
+    isUsedInBatch: false,
+    createdBy: CURRENT_USER,
+  });
 
   const handleSave = () => {
     if (!draft) return;
@@ -626,6 +684,115 @@ export default function DataManager() {
     }
   };
 
+  // ── Product Master CRUD handlers ─────────────────────────────────────
+  const handleProductSelect = (id: string) => {
+    if (selectedProductId === id) {
+      if (productEditMode && !confirm("Discard unsaved changes?")) return;
+      setSelectedProductId(null);
+      setProductEditMode(false);
+      setProductDraft(null);
+      return;
+    }
+    if (productEditMode && !confirm("Discard unsaved changes?")) return;
+    setSelectedProductId(id);
+    setProductEditMode(false);
+    setProductDraft(null);
+  };
+
+  const handleProductEdit = () => {
+    const prod = products.find((p) => p.id === selectedProductId);
+    if (!prod || prod.status !== "Draft") {
+      toast.error("Only Draft products can be edited");
+      return;
+    }
+    setProductDraft({ ...prod });
+    setProductEditMode(true);
+  };
+
+  const handleProductSave = () => {
+    if (!productDraft) return;
+    if (!productDraft.productCode.trim() || !productDraft.productName.trim()) {
+      toast.error("Product Code and Name are required");
+      return;
+    }
+    setProductSaveReason("");
+    setProductSaveConfirmOpen(true);
+  };
+
+  const handleConfirmProductSave = () => {
+    if (!productDraft) return;
+    try {
+      updateProduct(
+        productDraft.id,
+        productDraft,
+        CURRENT_USER,
+        productSaveReason,
+      );
+      setProducts(getAllProducts());
+      setProductEditMode(false);
+      setProductDraft(null);
+      setProductSaveConfirmOpen(false);
+      toast.success("Product saved successfully");
+    } catch {
+      toast.error("Failed to save product");
+    }
+  };
+
+  const handleProductApprove = () => {
+    if (!selectedProductId) return;
+    try {
+      approveProduct(selectedProductId, CURRENT_USER);
+      setProducts(getAllProducts());
+      toast.success("Product approved");
+    } catch (e) {
+      toast.error(String(e));
+    }
+  };
+
+  const handleProductDelete = () => {
+    if (!selectedProductId) return;
+    const prod = products.find((p) => p.id === selectedProductId);
+    if (!prod || prod.status !== "Draft") {
+      toast.error("Only Draft products can be deleted");
+      return;
+    }
+    if (!confirm(`Delete product "${prod.productName}"?`)) return;
+    try {
+      deleteProduct(selectedProductId);
+      setProducts(getAllProducts());
+      setSelectedProductId(null);
+      toast.success("Product deleted");
+    } catch (err) {
+      toast.error(String(err));
+    }
+  };
+
+  const handleCreateProduct = () => {
+    if (!newProduct.productCode.trim() || !newProduct.productName.trim()) {
+      toast.error("Product Code and Name are required");
+      return;
+    }
+    try {
+      createProduct(newProduct, CURRENT_USER);
+      setProducts(getAllProducts());
+      setNewProductDialogOpen(false);
+      setNewProduct({
+        productCode: "",
+        productName: "",
+        description: "",
+        campaignLength: 5,
+        dethTime: 48,
+        status: "Draft",
+        updatedAt: new Date().toISOString(),
+        isUsedInBatch: false,
+        createdBy: CURRENT_USER,
+      });
+      toast.success("Product created");
+    } catch (err) {
+      toast.error(String(err));
+    }
+  };
+
   const handleEntityTypeChange = (type: EntityType | "all") => {
     setSelectedEntityType(type);
     setSelectedId(null);
@@ -770,32 +937,43 @@ export default function DataManager() {
               isScrolled && "shadow-[0_2px_8px_rgba(0,0,0,0.08)]",
             )}
           >
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  size="sm"
-                  className="h-7 gap-1 text-[12px] px-3"
-                  data-ocid="data_manager.new_button"
-                >
-                  <Plus size={13} /> New <ChevronDown size={11} />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="text-[13px]">
-                {(Object.keys(ENTITY_TYPE_LABELS) as EntityType[]).map(
-                  (type) => (
-                    <DropdownMenuItem
-                      key={type}
-                      onClick={() => {
-                        setNewNode({ ...EMPTY_NODE, entityType: type });
-                        setNewDialogOpen(true);
-                      }}
-                    >
-                      {ENTITY_TYPE_LABELS[type]}
-                    </DropdownMenuItem>
-                  ),
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {selectedEntityType === "ProductMaster" ? (
+              <Button
+                size="sm"
+                className="h-7 gap-1 text-[12px] px-3"
+                onClick={() => setNewProductDialogOpen(true)}
+                data-ocid="data_manager.new_product_button"
+              >
+                <Plus size={13} /> New Product
+              </Button>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    className="h-7 gap-1 text-[12px] px-3"
+                    data-ocid="data_manager.new_button"
+                  >
+                    <Plus size={13} /> New <ChevronDown size={11} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="text-[13px]">
+                  {(Object.keys(ENTITY_TYPE_LABELS) as EntityType[])
+                    .filter((t) => t !== "ProductMaster")
+                    .map((type) => (
+                      <DropdownMenuItem
+                        key={type}
+                        onClick={() => {
+                          setNewNode({ ...EMPTY_NODE, entityType: type });
+                          setNewDialogOpen(true);
+                        }}
+                      >
+                        {ENTITY_TYPE_LABELS[type]}
+                      </DropdownMenuItem>
+                    ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
 
             <TooltipProvider>
               <Tooltip>
@@ -993,6 +1171,83 @@ export default function DataManager() {
                   <span className="text-[12px]">Loading...</span>
                 </div>
               </div>
+            ) : selectedEntityType === "ProductMaster" ? (
+              /* ── Product Master Cards ── */
+              <div
+                className="p-4 grid gap-3"
+                style={{
+                  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                }}
+              >
+                {products.length === 0 && (
+                  <div
+                    className="col-span-full flex flex-col items-center justify-center py-16 text-muted-foreground"
+                    data-ocid="data_manager.empty_state"
+                  >
+                    <Database size={32} className="mb-3 opacity-25" />
+                    <p className="text-[13px]">No products defined</p>
+                  </div>
+                )}
+                {products
+                  .filter(
+                    (p) =>
+                      search.trim() === "" ||
+                      p.productCode
+                        .toLowerCase()
+                        .includes(search.toLowerCase()) ||
+                      p.productName
+                        .toLowerCase()
+                        .includes(search.toLowerCase()),
+                  )
+                  .map((prod, idx) => (
+                    <button
+                      key={prod.id}
+                      type="button"
+                      onClick={() => handleProductSelect(prod.id)}
+                      data-ocid={`data_manager.item.${idx + 1}`}
+                      className={cn(
+                        "text-left rounded-lg border-l-4 border border-border p-3 cursor-pointer transition-all bg-violet-50 border-l-violet-400",
+                        selectedProductId === prod.id
+                          ? "ring-2 ring-primary ring-offset-1 shadow-md"
+                          : "hover:shadow-sm",
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <span className="text-[12.5px] font-semibold text-foreground leading-tight truncate">
+                          {prod.productName}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[9.5px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border whitespace-nowrap shrink-0",
+                            prod.status === "Approved"
+                              ? "bg-green-100 text-green-700 border-green-200"
+                              : prod.status === "Executed"
+                                ? "bg-blue-100 text-blue-700 border-blue-200"
+                                : "bg-gray-100 text-gray-600 border-gray-200",
+                          )}
+                        >
+                          {prod.status}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        {prod.productCode}
+                      </p>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <span className="text-[9.5px] px-1.5 py-0.5 rounded border bg-violet-100 text-violet-700 border-violet-200 font-semibold">
+                          Campaign: {prod.campaignLength}
+                        </span>
+                        <span className="text-[9.5px] px-1.5 py-0.5 rounded border bg-amber-100 text-amber-700 border-amber-200 font-semibold">
+                          DETH: {prod.dethTime}h
+                        </span>
+                        {prod.isUsedInBatch && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-300">
+                            In Batch
+                          </span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+              </div>
             ) : (
               <div
                 className="p-4 grid gap-3"
@@ -1156,6 +1411,41 @@ export default function DataManager() {
                                 ? "⊘ Executed"
                                 : "✗ Not Usable"}
                           </span>
+                          {/* Cleaning Badge */}
+                          {(() => {
+                            const cb = computeCleaningBadge({
+                              equipmentId: node.id,
+                              equipmentType: node.equipmentType,
+                              cleaningStatus: node.cleaningStatus,
+                              lastCleanedAt: node.lastCleanedAt,
+                              cleaningValidTill: node.cleaningValidTill,
+                              lastProductUsed: node.lastProductUsed,
+                              cleaningReason: node.cleaningReason,
+                              currentCampaignBatches:
+                                node.currentCampaignBatches,
+                            });
+                            return (
+                              <span
+                                className={cn(
+                                  "text-[9px] font-bold px-1.5 py-0.5 rounded-full border",
+                                  getCleaningBadgeStyle(cb),
+                                )}
+                              >
+                                {cb === "Clean"
+                                  ? "✓"
+                                  : cb === "Due"
+                                    ? "⚠"
+                                    : "✗"}{" "}
+                                {cb}
+                              </span>
+                            );
+                          })()}
+                          {/* Equipment Type badge */}
+                          {node.equipmentType && (
+                            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full border bg-slate-100 text-slate-700 border-slate-200">
+                              {node.equipmentType}
+                            </span>
+                          )}
                           {/* In Batch badge */}
                           {node.isUsedInBatch && (
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-300">
@@ -1242,7 +1532,290 @@ export default function DataManager() {
 
         {/* RIGHT PANE */}
         <div className="flex flex-col w-[420px] shrink-0 bg-white min-h-0 overflow-y-auto">
-          {currentNode ? (
+          {selectedEntityType === "ProductMaster" ? (
+            /* ── Product Master Detail Panel ── */
+            (() => {
+              const selProd =
+                products.find((p) => p.id === selectedProductId) ?? null;
+              const pdNode =
+                productEditMode && productDraft ? productDraft : selProd;
+              return selProd ? (
+                <>
+                  <div className="flex items-start justify-between px-5 py-3 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0">
+                    <div>
+                      <p className="text-[13px] font-semibold text-foreground">
+                        {pdNode?.productName}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground font-mono">
+                        {pdNode?.productCode}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <span
+                          className={cn(
+                            "text-[10px] font-semibold px-2 py-0.5 rounded-full border",
+                            getStatusBadgeClass(pdNode?.status ?? "Draft"),
+                          )}
+                        >
+                          {pdNode?.status === "Approved"
+                            ? "✓ Approved"
+                            : pdNode?.status === "Executed"
+                              ? "⊘ Executed"
+                              : "Draft"}
+                        </span>
+                        {pdNode?.isUsedInBatch && (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-orange-100 text-orange-800 border-orange-300">
+                            In Batch
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 justify-end ml-2">
+                      {productEditMode ? (
+                        <>
+                          <Button
+                            size="sm"
+                            className="h-7 gap-1 text-[12px] px-3"
+                            onClick={handleProductSave}
+                            data-ocid="data_manager.product.save_button"
+                          >
+                            <Save size={12} /> Save
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-[12px] px-3"
+                            onClick={() => {
+                              setProductEditMode(false);
+                              setProductDraft(null);
+                            }}
+                            data-ocid="data_manager.product.cancel_button"
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          {pdNode?.status === "Draft" &&
+                            !pdNode?.isUsedInBatch && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 gap-1 text-[12px] px-3"
+                                onClick={handleProductEdit}
+                                data-ocid="data_manager.product.edit_button"
+                              >
+                                <Edit2 size={12} /> Edit
+                              </Button>
+                            )}
+                          {pdNode?.status === "Draft" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 gap-1 text-[12px] px-3 text-green-700 border-green-300 hover:bg-green-50"
+                              onClick={handleProductApprove}
+                              data-ocid="data_manager.product.approve_button"
+                            >
+                              <Shield size={12} /> Approve
+                            </Button>
+                          )}
+                          {pdNode?.status === "Draft" &&
+                            !pdNode?.isUsedInBatch && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 gap-1 text-[12px] px-3 text-destructive border-destructive/30 hover:bg-red-50"
+                                onClick={handleProductDelete}
+                                data-ocid="data_manager.product.delete_button"
+                              >
+                                <Trash2 size={12} /> Delete
+                              </Button>
+                            )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto px-5 pb-5 mt-3">
+                    <SectionHeader title="Product Information" />
+                    <FieldRow label="Product Code">
+                      <Input
+                        disabled={!productEditMode}
+                        value={pdNode?.productCode ?? ""}
+                        onChange={(e) =>
+                          setProductDraft(
+                            (d) => d && { ...d, productCode: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px] font-mono"
+                        placeholder="e.g. PRD-AMX-001"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Product Name">
+                      <Input
+                        disabled={!productEditMode}
+                        value={pdNode?.productName ?? ""}
+                        onChange={(e) =>
+                          setProductDraft(
+                            (d) => d && { ...d, productName: e.target.value },
+                          )
+                        }
+                        className="h-7 text-[12px]"
+                        placeholder="Full product name"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Description">
+                      <Textarea
+                        disabled={!productEditMode}
+                        value={pdNode?.description ?? ""}
+                        onChange={(e) =>
+                          setProductDraft(
+                            (d) => d && { ...d, description: e.target.value },
+                          )
+                        }
+                        className="text-[12px] min-h-[60px] resize-none"
+                      />
+                    </FieldRow>
+                    <SectionHeader title="Campaign & Cleaning Parameters" />
+                    <FieldRow label="Campaign Length">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          disabled={!productEditMode}
+                          value={pdNode?.campaignLength ?? 5}
+                          onChange={(e) =>
+                            setProductDraft(
+                              (d) =>
+                                d && {
+                                  ...d,
+                                  campaignLength: Number(e.target.value),
+                                },
+                            )
+                          }
+                          className="h-7 text-[12px] w-24"
+                          min={1}
+                        />
+                        <span className="text-[11px] text-muted-foreground">
+                          batches max per campaign
+                        </span>
+                      </div>
+                    </FieldRow>
+                    <FieldRow label="DETH (hours)">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          disabled={!productEditMode}
+                          value={pdNode?.dethTime ?? 48}
+                          onChange={(e) =>
+                            setProductDraft(
+                              (d) =>
+                                d && { ...d, dethTime: Number(e.target.value) },
+                            )
+                          }
+                          className="h-7 text-[12px] w-24"
+                          min={1}
+                        />
+                        <span className="text-[11px] text-muted-foreground">
+                          Dirty Equipment Hold Time
+                        </span>
+                      </div>
+                    </FieldRow>
+                    <div className="mt-3 p-3 rounded-lg bg-violet-50 border border-violet-200 text-[11px] text-violet-700">
+                      <p className="font-semibold mb-1">Cleaning Logic:</p>
+                      <p>
+                        <strong>Fixed Equipment:</strong> Validity depends on
+                        Cleaning Reason + Product Code.
+                      </p>
+                      <p className="mt-0.5">
+                        <strong>Moveable Equipment:</strong> Validity depends
+                        ONLY on Product Code.
+                      </p>
+                      <p className="mt-1">
+                        Equipment must be re-cleaned when DETH is exceeded or
+                        campaign length is reached.
+                      </p>
+                    </div>
+                    <SectionHeader title="Lifecycle" />
+                    <FieldRow label="Created By">
+                      <Input
+                        readOnly
+                        value={pdNode?.createdBy ?? ""}
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Created At">
+                      <Input
+                        readOnly
+                        value={
+                          pdNode?.createdAt
+                            ? new Date(pdNode.createdAt).toLocaleDateString()
+                            : ""
+                        }
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <FieldRow label="Updated At">
+                      <Input
+                        readOnly
+                        value={
+                          pdNode?.updatedAt
+                            ? new Date(pdNode.updatedAt).toLocaleDateString()
+                            : ""
+                        }
+                        className="h-7 text-[12px] bg-muted/50"
+                      />
+                    </FieldRow>
+                    <SectionHeader title="Change History" />
+                    {(pdNode?.changeHistory ?? []).length === 0 ? (
+                      <p className="text-[12px] text-muted-foreground py-4 text-center">
+                        No changes recorded.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {[...(pdNode?.changeHistory ?? [])]
+                          .reverse()
+                          .map((entry) => (
+                            <div
+                              key={entry.timestamp + entry.field}
+                              className="flex gap-3 p-2.5 rounded-lg bg-muted/30 border border-border"
+                            >
+                              <Clock
+                                size={12}
+                                className="text-muted-foreground mt-0.5 shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11px] font-medium text-foreground">
+                                  <span className="font-semibold">
+                                    {entry.field}
+                                  </span>{" "}
+                                  changed by {entry.changedBy}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground mt-0.5">
+                                  {new Date(entry.timestamp).toLocaleString()}
+                                </p>
+                                {entry.reason && (
+                                  <p className="text-[10px] text-muted-foreground italic">
+                                    {entry.reason}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div
+                  className="flex flex-1 flex-col items-center justify-center text-muted-foreground"
+                  data-ocid="data_manager.product.empty_state"
+                >
+                  <Database size={40} className="mb-3 opacity-20" />
+                  <p className="text-[13px]">
+                    Select a product to view details
+                  </p>
+                </div>
+              );
+            })()
+          ) : currentNode ? (
             <>
               {/* Detail header */}
               <div className="flex items-start justify-between px-5 py-3 border-b border-border bg-[oklch(0.975_0.004_240)] shrink-0">
@@ -1471,6 +2044,60 @@ export default function DataManager() {
                     </span>
                   </div>
                 )}
+                {/* Cleaning warning banner — Due or Expired */}
+                {isEquipmentNode(currentNode) &&
+                  (() => {
+                    const cb = computeCleaningBadge({
+                      equipmentId: currentNode.id,
+                      equipmentType: editMode
+                        ? draft?.equipmentType
+                        : currentNode.equipmentType,
+                      lastCleanedAt: editMode
+                        ? draft?.lastCleanedAt
+                        : currentNode.lastCleanedAt,
+                      cleaningValidTill: editMode
+                        ? draft?.cleaningValidTill
+                        : currentNode.cleaningValidTill,
+                      lastProductUsed: editMode
+                        ? draft?.lastProductUsed
+                        : currentNode.lastProductUsed,
+                      cleaningReason: editMode
+                        ? draft?.cleaningReason
+                        : currentNode.cleaningReason,
+                      currentCampaignBatches: editMode
+                        ? draft?.currentCampaignBatches
+                        : currentNode.currentCampaignBatches,
+                    });
+                    if (cb === "Clean") return null;
+                    return (
+                      <div
+                        className={cn(
+                          "mx-4 mt-3 flex items-start gap-2 px-3 py-2 rounded-lg text-[12px] shrink-0 border",
+                          cb === "Expired"
+                            ? "bg-red-50 border-red-200 text-red-800"
+                            : "bg-amber-50 border-amber-200 text-amber-800",
+                        )}
+                      >
+                        <AlertTriangle
+                          size={13}
+                          className={cn(
+                            "shrink-0 mt-0.5",
+                            cb === "Expired"
+                              ? "text-red-600"
+                              : "text-amber-600",
+                          )}
+                        />
+                        <span>
+                          <strong>
+                            Cleaning {cb === "Expired" ? "Expired" : "Due"}:
+                          </strong>{" "}
+                          {cb === "Expired"
+                            ? "Cleaning validity has expired. Cleaning required before execution."
+                            : "Cleaning validity expires soon. Schedule cleaning before next execution."}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 <Tabs
                   defaultValue="basic"
                   className="flex flex-col flex-1 min-h-0"
@@ -2202,6 +2829,217 @@ export default function DataManager() {
 
                     {isEquipmentNode(currentNode) && (
                       <>
+                        <SectionHeader title="Equipment Hierarchy & Type" />
+                        <FieldRow label="Equipment Type">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.equipmentType
+                                : currentNode.equipmentType) ?? "none"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    equipmentType:
+                                      v === "none"
+                                        ? undefined
+                                        : (v as "Fixed" | "Moveable"),
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue placeholder="— Not Set —" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none" className="text-[12px]">
+                                — Not Set —
+                              </SelectItem>
+                              <SelectItem value="Fixed" className="text-[12px]">
+                                Fixed
+                              </SelectItem>
+                              <SelectItem
+                                value="Moveable"
+                                className="text-[12px]"
+                              >
+                                Moveable
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        <FieldRow label="Room">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode ? draft?.roomId : currentNode.roomId) ??
+                              "none"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    roomId: v === "none" ? undefined : v,
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue placeholder="— Not Set —" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none" className="text-[12px]">
+                                — Not Set —
+                              </SelectItem>
+                              {getAllRooms().map((room) => (
+                                <SelectItem
+                                  key={room.id}
+                                  value={room.id}
+                                  className="text-[12px]"
+                                >
+                                  {room.name} ({room.identifier})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        <FieldRow label="Station">
+                          <Select
+                            disabled={!editMode}
+                            value={
+                              (editMode
+                                ? draft?.stationId
+                                : currentNode.stationId) ?? "none"
+                            }
+                            onValueChange={(v) =>
+                              setDraft(
+                                (d) =>
+                                  d && {
+                                    ...d,
+                                    stationId: v === "none" ? undefined : v,
+                                    subStationId: undefined,
+                                  },
+                              )
+                            }
+                          >
+                            <SelectTrigger className="h-7 text-[12px]">
+                              <SelectValue placeholder="— Not Set —" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none" className="text-[12px]">
+                                — Not Set —
+                              </SelectItem>
+                              {nodes
+                                .filter((n) => n.entityType === "Station")
+                                .map((sta) => (
+                                  <SelectItem
+                                    key={sta.id}
+                                    value={sta.id}
+                                    className="text-[12px]"
+                                  >
+                                    {sta.shortDescription} ({sta.identifier})
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        </FieldRow>
+                        {(() => {
+                          const currentStationId = editMode
+                            ? draft?.stationId
+                            : currentNode.stationId;
+                          const subStations = nodes.filter(
+                            (n) =>
+                              n.entityType === "SubStation" &&
+                              n.parentId === currentStationId,
+                          );
+                          return (
+                            <FieldRow label="Sub-Station">
+                              <Select
+                                disabled={!editMode || !currentStationId}
+                                value={
+                                  (editMode
+                                    ? draft?.subStationId
+                                    : currentNode.subStationId) ?? "none"
+                                }
+                                onValueChange={(v) =>
+                                  setDraft(
+                                    (d) =>
+                                      d && {
+                                        ...d,
+                                        subStationId:
+                                          v === "none" ? undefined : v,
+                                      },
+                                  )
+                                }
+                              >
+                                <SelectTrigger className="h-7 text-[12px]">
+                                  <SelectValue
+                                    placeholder={
+                                      currentStationId
+                                        ? "— Not Set —"
+                                        : "Select Station first"
+                                    }
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem
+                                    value="none"
+                                    className="text-[12px]"
+                                  >
+                                    — Not Set —
+                                  </SelectItem>
+                                  {subStations.map((ss) => (
+                                    <SelectItem
+                                      key={ss.id}
+                                      value={ss.id}
+                                      className="text-[12px]"
+                                    >
+                                      {ss.shortDescription} ({ss.identifier})
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </FieldRow>
+                          );
+                        })()}
+                        {/* Hierarchy path display */}
+                        {(() => {
+                          const roomId = editMode
+                            ? draft?.roomId
+                            : currentNode.roomId;
+                          const stationId = editMode
+                            ? draft?.stationId
+                            : currentNode.stationId;
+                          const subStId = editMode
+                            ? draft?.subStationId
+                            : currentNode.subStationId;
+                          const roomName = roomId
+                            ? getAllRooms().find((r) => r.id === roomId)?.name
+                            : null;
+                          const stationName = stationId
+                            ? nodes.find((n) => n.id === stationId)
+                                ?.shortDescription
+                            : null;
+                          const subStName = subStId
+                            ? nodes.find((n) => n.id === subStId)
+                                ?.shortDescription
+                            : null;
+                          const parts = [
+                            roomName,
+                            stationName,
+                            subStName,
+                          ].filter(Boolean);
+                          if (!parts.length) return null;
+                          return (
+                            <div className="mt-1 mb-2 px-2 py-1.5 bg-muted/40 rounded text-[11px] text-muted-foreground font-mono">
+                              📍 {parts.join(" → ")}
+                            </div>
+                          );
+                        })()}
+
                         <SectionHeader title="Maintenance & PM" />
                         <FieldRow label="Maintenance Status">
                           <Select
@@ -2346,7 +3184,238 @@ export default function DataManager() {
                       value="cleaning"
                       className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                     >
-                      <SectionHeader title="Cleaning Status" />
+                      <SectionHeader title="Advanced Cleaning Status" />
+                      {(() => {
+                        const cNode = editMode ? draft : currentNode;
+                        if (!cNode) return null;
+                        const cb = computeCleaningBadge({
+                          equipmentId: cNode.id,
+                          equipmentType: cNode.equipmentType,
+                          lastCleanedAt: cNode.lastCleanedAt,
+                          cleaningValidTill: cNode.cleaningValidTill,
+                          lastProductUsed: cNode.lastProductUsed,
+                          cleaningReason: cNode.cleaningReason,
+                          currentCampaignBatches: cNode.currentCampaignBatches,
+                        });
+                        const matchedProduct = cNode.lastProductUsed
+                          ? getProductByCode(cNode.lastProductUsed)
+                          : null;
+                        return (
+                          <div className="space-y-3 mb-4">
+                            {/* Badge */}
+                            <div
+                              className={cn(
+                                "flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-semibold",
+                                getCleaningBadgeStyle(cb),
+                              )}
+                            >
+                              {cb === "Clean" ? (
+                                <CheckCircle2 size={14} />
+                              ) : cb === "Due" ? (
+                                <AlertTriangle size={14} />
+                              ) : (
+                                <XCircle size={14} />
+                              )}
+                              Cleaning Status: {cb}
+                              {cb !== "Clean" && (
+                                <span className="font-normal text-[11px] ml-1">
+                                  {cb === "Expired"
+                                    ? "— Equipment must be re-cleaned before execution"
+                                    : "— Cleaning expires soon"}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Advanced Cleaning Fields */}
+                            <FieldRow label="Last Cleaned At">
+                              <Input
+                                type="date"
+                                disabled={!editMode}
+                                value={
+                                  (cNode.lastCleanedAt ?? "").split("T")[0]
+                                }
+                                onChange={(e) =>
+                                  setDraft(
+                                    (d) =>
+                                      d && {
+                                        ...d,
+                                        lastCleanedAt: e.target.value
+                                          ? new Date(
+                                              e.target.value,
+                                            ).toISOString()
+                                          : undefined,
+                                      },
+                                  )
+                                }
+                                className="h-7 text-[12px]"
+                              />
+                            </FieldRow>
+                            <FieldRow label="Cleaning Valid Till">
+                              <div className="flex gap-1.5">
+                                <Input
+                                  type="date"
+                                  disabled={!editMode}
+                                  value={
+                                    (cNode.cleaningValidTill ?? "").split(
+                                      "T",
+                                    )[0]
+                                  }
+                                  onChange={(e) =>
+                                    setDraft(
+                                      (d) =>
+                                        d && {
+                                          ...d,
+                                          cleaningValidTill: e.target.value
+                                            ? new Date(
+                                                e.target.value,
+                                              ).toISOString()
+                                            : undefined,
+                                        },
+                                    )
+                                  }
+                                  className="h-7 text-[12px] flex-1"
+                                />
+                                {editMode &&
+                                  cNode.lastCleanedAt &&
+                                  cNode.lastProductUsed && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 text-[11px] px-2 shrink-0"
+                                      onClick={() => {
+                                        if (
+                                          !draft?.lastCleanedAt ||
+                                          !draft?.lastProductUsed
+                                        )
+                                          return;
+                                        const computed =
+                                          computeCleaningValidTill(
+                                            draft.lastCleanedAt,
+                                            draft.lastProductUsed,
+                                          );
+                                        setDraft(
+                                          (d) =>
+                                            d && {
+                                              ...d,
+                                              cleaningValidTill: computed,
+                                            },
+                                        );
+                                      }}
+                                    >
+                                      Compute from DETH
+                                    </Button>
+                                  )}
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="Last Product Used">
+                              <Input
+                                disabled={!editMode}
+                                value={cNode.lastProductUsed ?? ""}
+                                onChange={(e) =>
+                                  setDraft(
+                                    (d) =>
+                                      d && {
+                                        ...d,
+                                        lastProductUsed:
+                                          e.target.value || undefined,
+                                      },
+                                  )
+                                }
+                                placeholder="e.g. PRD-AMX-001"
+                                className="h-7 text-[12px]"
+                              />
+                            </FieldRow>
+                            <FieldRow label="Cleaning Reason">
+                              <Input
+                                disabled={!editMode}
+                                value={cNode.cleaningReason ?? ""}
+                                onChange={(e) =>
+                                  setDraft(
+                                    (d) =>
+                                      d && {
+                                        ...d,
+                                        cleaningReason:
+                                          e.target.value || undefined,
+                                      },
+                                  )
+                                }
+                                placeholder="e.g. Product changeover"
+                                className="h-7 text-[12px]"
+                              />
+                            </FieldRow>
+                            <FieldRow label="Campaign Batches">
+                              <Input
+                                type="number"
+                                disabled={!editMode}
+                                value={cNode.currentCampaignBatches ?? ""}
+                                onChange={(e) =>
+                                  setDraft(
+                                    (d) =>
+                                      d && {
+                                        ...d,
+                                        currentCampaignBatches: e.target.value
+                                          ? Number(e.target.value)
+                                          : undefined,
+                                      },
+                                  )
+                                }
+                                placeholder="0"
+                                className="h-7 text-[12px]"
+                              />
+                            </FieldRow>
+
+                            {/* Product info panel */}
+                            {matchedProduct && (
+                              <div className="p-2.5 rounded-lg bg-violet-50 border border-violet-200 text-[11.5px]">
+                                <p className="font-semibold text-violet-800 mb-1">
+                                  📦 {matchedProduct.productName} (
+                                  {matchedProduct.productCode})
+                                </p>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-violet-700">
+                                  <span>
+                                    Campaign Length:{" "}
+                                    <strong>
+                                      {matchedProduct.campaignLength} batches
+                                    </strong>
+                                  </span>
+                                  <span>
+                                    DETH:{" "}
+                                    <strong>{matchedProduct.dethTime}h</strong>
+                                  </span>
+                                  {cNode.currentCampaignBatches !==
+                                    undefined && (
+                                    <span
+                                      className={cn(
+                                        "col-span-2 font-semibold mt-0.5",
+                                        cNode.currentCampaignBatches >=
+                                          matchedProduct.campaignLength
+                                          ? "text-red-700"
+                                          : cNode.currentCampaignBatches >=
+                                              matchedProduct.campaignLength - 1
+                                            ? "text-amber-700"
+                                            : "text-green-700",
+                                      )}
+                                    >
+                                      Batches used:{" "}
+                                      {cNode.currentCampaignBatches} /{" "}
+                                      {matchedProduct.campaignLength}
+                                      {cNode.currentCampaignBatches >=
+                                      matchedProduct.campaignLength
+                                        ? " — Campaign limit reached! Cleaning required."
+                                        : cNode.currentCampaignBatches >=
+                                            matchedProduct.campaignLength - 1
+                                          ? " — Approaching campaign limit."
+                                          : ""}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+
+                      <SectionHeader title="Cleaning Status (Legacy)" />
                       {(() => {
                         const cs = computeCleaningStatus(
                           (editMode
@@ -3174,6 +4243,202 @@ export default function DataManager() {
               data-ocid="data_manager.make_draft_dialog.confirm_button"
             >
               <RotateCcw size={13} className="mr-1" /> Convert to Draft
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Product Dialog */}
+      <Dialog
+        open={newProductDialogOpen}
+        onOpenChange={setNewProductDialogOpen}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.new_product.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="text-[15px]">
+              New Product Master
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-[11.5px]">Product Code *</Label>
+                <Input
+                  value={newProduct.productCode}
+                  onChange={(e) =>
+                    setNewProduct((n) => ({
+                      ...n,
+                      productCode: e.target.value,
+                    }))
+                  }
+                  placeholder="e.g. PRD-ABC-001"
+                  className="h-8 text-[12px] font-mono"
+                  data-ocid="data_manager.new_product_code.input"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11.5px]">Status</Label>
+                <Select
+                  value={newProduct.status}
+                  onValueChange={(v) =>
+                    setNewProduct((n) => ({
+                      ...n,
+                      status: v as "Draft" | "Approved" | "Executed",
+                    }))
+                  }
+                >
+                  <SelectTrigger className="h-8 text-[12px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Draft" className="text-[12px]">
+                      Draft
+                    </SelectItem>
+                    <SelectItem value="Approved" className="text-[12px]">
+                      Approved
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11.5px]">Product Name *</Label>
+              <Input
+                value={newProduct.productName}
+                onChange={(e) =>
+                  setNewProduct((n) => ({ ...n, productName: e.target.value }))
+                }
+                placeholder="Full product name"
+                className="h-8 text-[12px]"
+                data-ocid="data_manager.new_product_name.input"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11.5px]">Description</Label>
+              <Textarea
+                value={newProduct.description}
+                onChange={(e) =>
+                  setNewProduct((n) => ({ ...n, description: e.target.value }))
+                }
+                className="text-[12px] min-h-[60px] resize-none"
+                data-ocid="data_manager.new_product_description.textarea"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-[11.5px]">
+                  Campaign Length (batches)
+                </Label>
+                <Input
+                  type="number"
+                  value={newProduct.campaignLength}
+                  onChange={(e) =>
+                    setNewProduct((n) => ({
+                      ...n,
+                      campaignLength: Number(e.target.value),
+                    }))
+                  }
+                  className="h-8 text-[12px]"
+                  min={1}
+                  data-ocid="data_manager.new_product_campaign.input"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11.5px]">DETH (hours)</Label>
+                <Input
+                  type="number"
+                  value={newProduct.dethTime}
+                  onChange={(e) =>
+                    setNewProduct((n) => ({
+                      ...n,
+                      dethTime: Number(e.target.value),
+                    }))
+                  }
+                  className="h-8 text-[12px]"
+                  min={1}
+                  data-ocid="data_manager.new_product_deth.input"
+                />
+              </div>
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setNewProductDialogOpen(false)}
+              data-ocid="data_manager.new_product.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleCreateProduct}
+              disabled={!newProduct.productCode || !newProduct.productName}
+              data-ocid="data_manager.new_product.submit_button"
+            >
+              Create Product
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Product Save Confirm Dialog */}
+      <Dialog
+        open={productSaveConfirmOpen}
+        onOpenChange={setProductSaveConfirmOpen}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <Save size={16} className="text-primary" /> Confirm Product
+              Changes
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="flex items-start gap-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-[12px] text-amber-800">
+              <AlertTriangle
+                size={14}
+                className="shrink-0 mt-0.5 text-amber-600"
+              />
+              <span>Are you sure you want to modify this product record?</span>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[12px] font-medium">
+                Reason for Change{" "}
+                <span className="text-muted-foreground font-normal">
+                  (optional)
+                </span>
+              </Label>
+              <Textarea
+                value={productSaveReason}
+                onChange={(e) => setProductSaveReason(e.target.value)}
+                placeholder="Reason for change (optional)"
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.product_save_reason.textarea"
+              />
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setProductSaveConfirmOpen(false)}
+              data-ocid="data_manager.product_save.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleConfirmProductSave}
+              className="gap-1"
+              data-ocid="data_manager.product_save.confirm_button"
+            >
+              <Save size={13} /> Save Changes
             </Button>
           </DialogFooter>
         </DialogContent>

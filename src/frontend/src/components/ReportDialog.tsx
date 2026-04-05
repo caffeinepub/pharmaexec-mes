@@ -21,10 +21,13 @@ import React, { useMemo, useState } from "react";
 
 type EntityType =
   | "WorkCenter"
+  | "Room"
   | "Station"
+  | "SubStation"
   | "EquipmentClass"
   | "EquipmentEntity"
-  | "PropertyType";
+  | "PropertyType"
+  | "ProductMaster";
 
 interface ChangeEntry {
   timestamp: string;
@@ -51,10 +54,13 @@ interface EquipmentNode {
 
 const ENTITY_TYPE_LABELS: Record<EntityType, string> = {
   WorkCenter: "Work Center",
+  Room: "Room",
   Station: "Station",
+  SubStation: "Sub-Station",
   EquipmentClass: "Equipment Class",
   EquipmentEntity: "Equipment Entity",
   PropertyType: "Property Type",
+  ProductMaster: "Product Master",
 };
 
 interface ReportDialogProps {

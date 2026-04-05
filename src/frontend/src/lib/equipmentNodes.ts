@@ -7,6 +7,7 @@ import type {
   CleaningLogEntry,
   CleaningRule,
   ComparisonType,
+  EquipmentType,
   GmpStatus,
   HealthStatus,
   MaintenanceStatus,
@@ -14,10 +15,13 @@ import type {
 
 export type EntityType =
   | "WorkCenter"
+  | "Room"
   | "Station"
+  | "SubStation"
   | "EquipmentClass"
   | "EquipmentEntity"
-  | "PropertyType";
+  | "PropertyType"
+  | "ProductMaster";
 
 export interface ChangeEntry {
   timestamp: string;
@@ -78,6 +82,18 @@ export interface EquipmentNode {
   createdBy?: string; // default 'System'
   updatedAt?: string; // ISO string
   isUsedInBatch?: boolean; // default false — locks Edit/Delete when true
+  // Advanced Equipment Type & Hierarchy (pharma execution logic)
+  equipmentType?: EquipmentType; // Fixed | Moveable
+  roomId?: string; // linked Room id
+  stationId?: string; // linked Station id
+  subStationId?: string; // linked Sub-Station id
+  // Advanced Cleaning fields
+  cleaningStatus?: "Clean" | "Due" | "Expired";
+  lastCleanedAt?: string; // ISO date string
+  cleaningValidTill?: string; // ISO date string
+  lastProductUsed?: string; // productCode
+  cleaningReason?: string; // required for Fixed equipment
+  currentCampaignBatches?: number; // batches completed in current campaign
 }
 
 export const INITIAL_DATA: EquipmentNode[] = [
@@ -374,7 +390,18 @@ export const INITIAL_DATA: EquipmentNode[] = [
       lastProduct: "Amoxicillin 250mg",
       lastCleanedDate: "2026-03-20",
       cleaningLevel: "Major",
+      cleaningReason: "Product changeover - end of campaign",
     },
+    equipmentType: "Fixed",
+    roomId: "room_001",
+    stationId: "sta3",
+    subStationId: "subst_001",
+    cleaningStatus: "Clean",
+    lastCleanedAt: "2026-03-20T08:00:00Z",
+    cleaningValidTill: "2026-04-20T08:00:00Z",
+    lastProductUsed: "PRD-AMX-001",
+    cleaningReason: "Product changeover - end of Amoxicillin campaign",
+    currentCampaignBatches: 5,
   },
   // ee2: Draft, Active, Good, PM Due Soon — yellow
   {
@@ -445,6 +472,15 @@ export const INITIAL_DATA: EquipmentNode[] = [
     pm_due_date: "2026-03-15",
     cleaningRules: [],
     cleaningLog: null,
+    equipmentType: "Moveable",
+    roomId: "room_002",
+    stationId: "sta3",
+    subStationId: "subst_002",
+    cleaningStatus: "Expired",
+    lastCleanedAt: "2026-01-01T08:00:00Z",
+    cleaningValidTill: "2026-01-03T08:00:00Z",
+    lastProductUsed: "PRD-OMP-003",
+    currentCampaignBatches: 4,
   },
   // ee4: Approved, Active, Good, PM OK, cleaning Required — red
   {
@@ -500,6 +536,16 @@ export const INITIAL_DATA: EquipmentNode[] = [
       lastCleanedDate: "2026-03-28",
       cleaningLevel: "Minor",
     },
+    equipmentType: "Fixed",
+    roomId: "room_001",
+    stationId: "sta4",
+    subStationId: "subst_003",
+    cleaningStatus: "Due",
+    lastCleanedAt: "2026-03-28T07:00:00Z",
+    cleaningValidTill: "2026-04-06T07:00:00Z",
+    lastProductUsed: "PRD-AMX-001",
+    cleaningReason: "Routine inter-batch cleaning",
+    currentCampaignBatches: 3,
   },
   // ee5: Draft, Active, Good, PM OK, cleaning OK — green
   {
@@ -541,7 +587,16 @@ export const INITIAL_DATA: EquipmentNode[] = [
       lastProduct: "Paracetamol 500mg",
       lastCleanedDate: "2026-03-30",
       cleaningLevel: "Major",
+      cleaningReason: "Major cleaning after Paracetamol campaign",
     },
+    equipmentType: "Moveable",
+    roomId: "room_002",
+    stationId: "sta4",
+    cleaningStatus: "Clean",
+    lastCleanedAt: "2026-03-30T09:00:00Z",
+    cleaningValidTill: "2026-04-30T09:00:00Z",
+    lastProductUsed: "PRD-MET-002",
+    currentCampaignBatches: 2,
   },
   // ee6: Approved, Active, Bad, PM Overdue — red
   {
@@ -577,6 +632,14 @@ export const INITIAL_DATA: EquipmentNode[] = [
     pm_due_date: "2026-02-28",
     cleaningRules: [],
     cleaningLog: null,
+    equipmentType: "Fixed",
+    roomId: "room_002",
+    stationId: "sta4",
+    cleaningStatus: "Expired",
+    lastCleanedAt: "2026-02-01T08:00:00Z",
+    cleaningValidTill: "2026-02-03T08:00:00Z",
+    lastProductUsed: "PRD-CIP-005",
+    currentCampaignBatches: 3,
   },
   {
     id: "pt1",
@@ -676,5 +739,147 @@ export const INITIAL_DATA: EquipmentNode[] = [
     required_min: "50",
     required_max: "150",
     comparison_type: "WITHIN_RANGE",
+  },
+  // Room nodes — top of location hierarchy
+  {
+    id: "room_001",
+    identifier: "RM-MFG-01",
+    shortDescription: "Manufacturing Room A",
+    description: "Primary solid dosage manufacturing area — ISO 8 clean room",
+    level: "0",
+    inventoryNumber: "INV-RM-001",
+    manufacturer: "Facility",
+    externalId: "RM001",
+    serialNumber: "",
+    manufacturingDate: "",
+    disposed: false,
+    barcode: "BC-RM-001",
+    barcodeEnabled: false,
+    entityType: "Room",
+    parentId: null,
+    automationServerNameDefault: "",
+    automationServerName: "",
+    dataOpsPath: "/pharma/rooms/mfg-a",
+    historianProvider: "",
+    historianAccessServerDefault: "",
+    historianAccessServer: "",
+    historianServerDefault: "",
+    historianServer: "",
+    createdAt: "2024-01-01T08:00:00Z",
+    changeHistory: [],
+    status: "Approved",
+  },
+  {
+    id: "room_002",
+    identifier: "RM-MFG-02",
+    shortDescription: "Manufacturing Room B",
+    description: "Secondary coating and granulation area — ISO 7 clean room",
+    level: "0",
+    inventoryNumber: "INV-RM-002",
+    manufacturer: "Facility",
+    externalId: "RM002",
+    serialNumber: "",
+    manufacturingDate: "",
+    disposed: false,
+    barcode: "BC-RM-002",
+    barcodeEnabled: false,
+    entityType: "Room",
+    parentId: null,
+    automationServerNameDefault: "",
+    automationServerName: "",
+    dataOpsPath: "/pharma/rooms/mfg-b",
+    historianProvider: "",
+    historianAccessServerDefault: "",
+    historianAccessServer: "",
+    historianServerDefault: "",
+    historianServer: "",
+    createdAt: "2024-01-01T08:00:00Z",
+    changeHistory: [],
+    status: "Approved",
+  },
+  // SubStation nodes — between Station and Equipment
+  {
+    id: "subst_001",
+    identifier: "SS-COAT-01A",
+    shortDescription: "Coating Sub-Station A",
+    description: "Sub-station for drum loading and spray system",
+    level: "3",
+    inventoryNumber: "INV-SS-001",
+    manufacturer: "Pharma Machines Ltd",
+    externalId: "SS001",
+    serialNumber: "",
+    manufacturingDate: "",
+    disposed: false,
+    barcode: "BC-SS-001",
+    barcodeEnabled: false,
+    entityType: "SubStation",
+    parentId: "sta3",
+    automationServerNameDefault: "",
+    automationServerName: "",
+    dataOpsPath: "/pharma/coating/wc001/vessel/ss-a",
+    historianProvider: "",
+    historianAccessServerDefault: "",
+    historianAccessServer: "",
+    historianServerDefault: "",
+    historianServer: "",
+    createdAt: "2024-01-01T08:00:00Z",
+    changeHistory: [],
+    status: "Approved",
+  },
+  {
+    id: "subst_002",
+    identifier: "SS-COAT-01B",
+    shortDescription: "Coating Sub-Station B",
+    description: "Sub-station for air handling and exhaust",
+    level: "3",
+    inventoryNumber: "INV-SS-002",
+    manufacturer: "Pharma Machines Ltd",
+    externalId: "SS002",
+    serialNumber: "",
+    manufacturingDate: "",
+    disposed: false,
+    barcode: "BC-SS-002",
+    barcodeEnabled: false,
+    entityType: "SubStation",
+    parentId: "sta3",
+    automationServerNameDefault: "",
+    automationServerName: "",
+    dataOpsPath: "/pharma/coating/wc001/vessel/ss-b",
+    historianProvider: "",
+    historianAccessServerDefault: "",
+    historianAccessServer: "",
+    historianServerDefault: "",
+    historianServer: "",
+    createdAt: "2024-01-01T08:00:00Z",
+    changeHistory: [],
+    status: "Approved",
+  },
+  {
+    id: "subst_003",
+    identifier: "SS-GRN-01A",
+    shortDescription: "Granulation Sub-Station A",
+    description: "Wet granulation impeller sub-station",
+    level: "3",
+    inventoryNumber: "INV-SS-003",
+    manufacturer: "GEA Pharma Systems",
+    externalId: "SS003",
+    serialNumber: "",
+    manufacturingDate: "",
+    disposed: false,
+    barcode: "BC-SS-003",
+    barcodeEnabled: false,
+    entityType: "SubStation",
+    parentId: "sta4",
+    automationServerNameDefault: "",
+    automationServerName: "",
+    dataOpsPath: "/pharma/coating/wc002/vessel-a/ss-a",
+    historianProvider: "",
+    historianAccessServerDefault: "",
+    historianAccessServer: "",
+    historianServerDefault: "",
+    historianServer: "",
+    createdAt: "2024-01-01T08:00:00Z",
+    changeHistory: [],
+    status: "Approved",
   },
 ];
