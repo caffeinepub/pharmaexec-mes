@@ -34,12 +34,20 @@ export interface ChangeEntry {
 }
 
 // ── New MES types ─────────────────────────────────────────────────────────
-export type LogbookAction =
+export type EquipmentLogbookAction =
   | "Execution Start"
   | "Execution Stop"
   | "Cleaning"
   | "Pause"
-  | "Resume";
+  | "Resume"
+  | "Status Change";
+
+export type RoomLogbookAction =
+  | "Room Cleaning"
+  | "Line Clearance"
+  | "Area Status Change";
+
+export type LogbookAction = EquipmentLogbookAction | RoomLogbookAction;
 
 export interface LogbookEntry {
   id: string;
@@ -49,6 +57,8 @@ export interface LogbookEntry {
   reason: string;
   statusChange?: string; // e.g. "Draft → Approved", "Approved → Executed"
   details?: string;
+  entityType?: "Equipment" | "Room";
+  entityIdentifier?: string;
 }
 
 export interface StatusHistoryEntry {
@@ -1136,6 +1146,67 @@ export const INITIAL_DATA: EquipmentNode[] = [
     createdAt: "2024-01-01T08:00:00Z",
     changeHistory: [],
     status: "Approved",
+    logbookEntries: [
+      {
+        id: "lb-rm1-1",
+        timestamp: "2026-03-10T06:00:00Z",
+        user: "Operator J. Patel",
+        action: "Room Cleaning",
+        reason: "Scheduled ISO 8 clean room deep clean before new campaign",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-01",
+        details: "Cleaning agent: IPA 70% + disinfectant cycle",
+      },
+      {
+        id: "lb-rm1-2",
+        timestamp: "2026-03-10T09:30:00Z",
+        user: "QA Officer R. Mehta",
+        action: "Line Clearance",
+        reason: "Pre-batch line clearance for Amoxicillin campaign",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-01",
+        details: "LC-2026-031 approved — no previous product residue found",
+      },
+      {
+        id: "lb-rm1-3",
+        timestamp: "2026-03-18T07:00:00Z",
+        user: "Supervisor A. Kumar",
+        action: "Area Status Change",
+        reason: "Room status changed to In-Use for Batch B-2026-001",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-01",
+        statusChange: "Clean → In-Use",
+      },
+      {
+        id: "lb-rm1-4",
+        timestamp: "2026-03-19T17:00:00Z",
+        user: "Supervisor A. Kumar",
+        action: "Area Status Change",
+        reason: "Batch B-2026-001 complete, room released for cleaning",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-01",
+        statusChange: "In-Use → Cleaning Required",
+      },
+      {
+        id: "lb-rm1-5",
+        timestamp: "2026-03-20T09:00:00Z",
+        user: "Operator J. Patel",
+        action: "Room Cleaning",
+        reason: "Post-batch cleaning — Amoxicillin residue removal",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-01",
+        details: "CIP Level: Major, Valid till 2026-04-20",
+      },
+    ],
+    statusHistory: [
+      {
+        timestamp: "2024-01-01T08:00:00Z",
+        user: "Facility Manager",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "Initial GMP qualification and ISO certification complete",
+      },
+    ],
   },
   {
     id: "room_002",
@@ -1164,6 +1235,68 @@ export const INITIAL_DATA: EquipmentNode[] = [
     createdAt: "2024-01-01T08:00:00Z",
     changeHistory: [],
     status: "Approved",
+    logbookEntries: [
+      {
+        id: "lb-rm2-1",
+        timestamp: "2026-02-15T06:30:00Z",
+        user: "Operator S. Rajan",
+        action: "Line Clearance",
+        reason: "Pre-campaign line clearance for Metformin granulation",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-02",
+        details: "LC-2026-018 approved — all previous materials cleared",
+      },
+      {
+        id: "lb-rm2-2",
+        timestamp: "2026-02-15T08:00:00Z",
+        user: "Supervisor M. Torres",
+        action: "Area Status Change",
+        reason: "Room activated for Metformin coating campaign",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-02",
+        statusChange: "Clean → In-Use",
+      },
+      {
+        id: "lb-rm2-3",
+        timestamp: "2026-03-05T16:00:00Z",
+        user: "QA Officer R. Mehta",
+        action: "Area Status Change",
+        reason:
+          "Campaign complete, area placed under quarantine pending QA review",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-02",
+        statusChange: "In-Use → Quarantine",
+      },
+      {
+        id: "lb-rm2-4",
+        timestamp: "2026-03-06T10:00:00Z",
+        user: "Operator S. Rajan",
+        action: "Room Cleaning",
+        reason: "Full clean room sanitisation — post-campaign decontamination",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-02",
+        details: "ISO 7 protocol applied, fogging with H2O2 vapour",
+      },
+      {
+        id: "lb-rm2-5",
+        timestamp: "2026-03-07T08:00:00Z",
+        user: "QA Officer R. Mehta",
+        action: "Area Status Change",
+        reason: "QA environmental swab results clean — room released",
+        entityType: "Room",
+        entityIdentifier: "RM-MFG-02",
+        statusChange: "Quarantine → Clean",
+      },
+    ],
+    statusHistory: [
+      {
+        timestamp: "2024-01-01T08:00:00Z",
+        user: "Facility Manager",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "Initial GMP qualification and ISO 7 certification complete",
+      },
+    ],
   },
   // SubStation nodes — between Station and Equipment
   {

@@ -84,10 +84,12 @@ import { helpContent } from "../data/helpContent";
 import {
   type ChangeEntry,
   type EntityType,
+  type EquipmentLogbookAction,
   type EquipmentNode,
   INITIAL_DATA,
   type LogbookAction,
   type LogbookEntry,
+  type RoomLogbookAction,
   type StatusHistoryEntry,
 } from "../lib/equipmentNodes";
 import {
@@ -1223,6 +1225,8 @@ export default function DataManager() {
 
   const isEquipmentNode = (n: EquipmentNode) =>
     n.entityType === "EquipmentEntity" || n.entityType === "EquipmentClass";
+
+  const isRoomNode = (n: EquipmentNode) => n.entityType === "Room";
 
   return (
     <div className="flex flex-col flex-1 min-h-0 -m-6">
@@ -3641,7 +3645,8 @@ export default function DataManager() {
                                   "Cleaning",
                                   "Pause",
                                   "Resume",
-                                ] as LogbookAction[]
+                                  "Status Change",
+                                ] as EquipmentLogbookAction[]
                               ).map((action) => {
                                 const count =
                                   currentNode.logbookEntries!.filter(
@@ -3673,7 +3678,7 @@ export default function DataManager() {
                               .reverse()
                               .map((entry: LogbookEntry, idx: number) => {
                                 const actionConfig: Record<
-                                  LogbookAction,
+                                  EquipmentLogbookAction,
                                   {
                                     bg: string;
                                     border: string;
@@ -3741,8 +3746,33 @@ export default function DataManager() {
                                       />
                                     ),
                                   },
+                                  "Status Change": {
+                                    bg: "bg-slate-50",
+                                    border: "border-l-slate-400",
+                                    badge:
+                                      "bg-slate-100 text-slate-700 border-slate-200",
+                                    icon: (
+                                      <History
+                                        size={14}
+                                        className="text-slate-600 shrink-0"
+                                      />
+                                    ),
+                                  },
                                 };
-                                const config = actionConfig[entry.action];
+                                const config = actionConfig[
+                                  entry.action as EquipmentLogbookAction
+                                ] ?? {
+                                  bg: "bg-muted/30",
+                                  border: "border-l-border",
+                                  badge:
+                                    "bg-muted text-muted-foreground border-border",
+                                  icon: (
+                                    <Clock
+                                      size={14}
+                                      className="text-muted-foreground shrink-0"
+                                    />
+                                  ),
+                                };
                                 return (
                                   <div
                                     key={entry.id}
@@ -3806,8 +3836,182 @@ export default function DataManager() {
                           </div>
                         )}
                       </>
+                    ) : isRoomNode(currentNode) ? (
+                      <>
+                        {/* Room logbook — same rich timeline as Equipment */}
+                        <SectionHeader title="Room Logbook" />
+                        {/* Entry count summary */}
+                        {currentNode.logbookEntries &&
+                          currentNode.logbookEntries.length > 0 && (
+                            <div className="flex gap-2 flex-wrap mb-3 mt-1">
+                              {(
+                                [
+                                  "Room Cleaning",
+                                  "Line Clearance",
+                                  "Area Status Change",
+                                ] as RoomLogbookAction[]
+                              ).map((action) => {
+                                const count =
+                                  currentNode.logbookEntries!.filter(
+                                    (e) => e.action === action,
+                                  ).length;
+                                if (count === 0) return null;
+                                return (
+                                  <span
+                                    key={action}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-muted border text-muted-foreground"
+                                  >
+                                    {action}: {count}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        {!currentNode.logbookEntries ||
+                        currentNode.logbookEntries.length === 0 ? (
+                          <div
+                            className="text-[12px] text-muted-foreground py-6 text-center"
+                            data-ocid="data_manager.logbook.empty_state"
+                          >
+                            No logbook entries recorded.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {[...currentNode.logbookEntries]
+                              .reverse()
+                              .map((entry: LogbookEntry, idx: number) => {
+                                const roomActionConfig: Record<
+                                  RoomLogbookAction,
+                                  {
+                                    bg: string;
+                                    border: string;
+                                    badge: string;
+                                    icon: React.ReactNode;
+                                  }
+                                > = {
+                                  "Room Cleaning": {
+                                    bg: "bg-blue-50",
+                                    border: "border-l-blue-400",
+                                    badge:
+                                      "bg-blue-100 text-blue-700 border-blue-200",
+                                    icon: (
+                                      <Sparkles
+                                        size={14}
+                                        className="text-blue-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  "Line Clearance": {
+                                    bg: "bg-teal-50",
+                                    border: "border-l-teal-500",
+                                    badge:
+                                      "bg-teal-100 text-teal-700 border-teal-200",
+                                    icon: (
+                                      <ClipboardList
+                                        size={14}
+                                        className="text-teal-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  "Area Status Change": {
+                                    bg: "bg-amber-50",
+                                    border: "border-l-amber-400",
+                                    badge:
+                                      "bg-amber-100 text-amber-700 border-amber-200",
+                                    icon: (
+                                      <History
+                                        size={14}
+                                        className="text-amber-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                };
+                                const config = roomActionConfig[
+                                  entry.action as RoomLogbookAction
+                                ] ?? {
+                                  bg: "bg-muted/30",
+                                  border: "border-l-border",
+                                  badge:
+                                    "bg-muted text-muted-foreground border-border",
+                                  icon: (
+                                    <Clock
+                                      size={14}
+                                      className="text-muted-foreground shrink-0"
+                                    />
+                                  ),
+                                };
+                                return (
+                                  <div
+                                    key={entry.id}
+                                    className={cn(
+                                      "border-l-4 rounded-r-lg p-3",
+                                      config.bg,
+                                      config.border,
+                                    )}
+                                    data-ocid={`data_manager.logbook.item.${idx + 1}`}
+                                  >
+                                    {/* Row 1: icon + action badge + timestamp + user */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      {config.icon}
+                                      <span
+                                        className={cn(
+                                          "text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border",
+                                          config.badge,
+                                        )}
+                                      >
+                                        {entry.action}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground font-mono">
+                                        {new Date(
+                                          entry.timestamp,
+                                        ).toLocaleString("en-GB", {
+                                          day: "2-digit",
+                                          month: "short",
+                                          year: "numeric",
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                        })}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground ml-auto font-medium">
+                                        {entry.user}
+                                      </span>
+                                    </div>
+                                    {/* Row 2: reason */}
+                                    <p className="text-[12px] text-foreground mt-1.5">
+                                      {entry.reason}
+                                    </p>
+                                    {/* Row 3: statusChange (if present) */}
+                                    {entry.statusChange && (
+                                      <div className="flex items-center gap-1.5 mt-1">
+                                        <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                                          Status:
+                                        </span>
+                                        <span className="text-[11px] font-mono font-medium text-foreground">
+                                          {entry.statusChange}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {/* Row 4: entityIdentifier (if present) */}
+                                    {entry.entityIdentifier && (
+                                      <p className="text-[11px] text-muted-foreground italic mt-0.5">
+                                        {entry.entityType}:{" "}
+                                        {entry.entityIdentifier}
+                                      </p>
+                                    )}
+                                    {/* Row 5: details (if present) */}
+                                    {entry.details && (
+                                      <p className="text-[11px] text-muted-foreground italic mt-0.5">
+                                        {entry.details}
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </>
                     ) : (
-                      /* Non-equipment: show change history as before */
+                      /* Other entity types: show change history */
                       <>
                         <SectionHeader title="Logbook Entries" />
                         {currentNode.changeHistory.length === 0 ? (
