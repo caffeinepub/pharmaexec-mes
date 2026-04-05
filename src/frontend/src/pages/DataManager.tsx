@@ -615,11 +615,14 @@ export default function DataManager() {
         "currentCampaignBatches",
         "lastCleanedAt",
       ];
-      const cleaningTriggerChanged = prev
-        ? cleaningTriggerFields.some(
-            (f) => String(prev[f] ?? "") !== String(savedDraft[f] ?? ""),
-          )
-        : false;
+      const cleaningTriggerChanged =
+        // Force recalculate when product changed (campaign reset = cleaning context changed)
+        !!campaignResetEntry ||
+        (prev
+          ? cleaningTriggerFields.some(
+              (f) => String(prev[f] ?? "") !== String(savedDraft[f] ?? ""),
+            )
+          : false);
 
       let finalDraft = savedDraft;
       const cleaningRecalcEntries: ChangeEntry[] = [];
@@ -678,7 +681,7 @@ export default function DataManager() {
             ? {
                 ...finalDraft,
                 updatedAt: now,
-                changeHistory: [...draft.changeHistory, ...allChanges],
+                changeHistory: [...n.changeHistory, ...allChanges],
               }
             : n,
         ),
@@ -1308,6 +1311,11 @@ export default function DataManager() {
                   : new Date(
                       Date.now() + 30 * 24 * 60 * 60 * 1000,
                     ).toISOString(),
+                // GMP: link cleaning to product code and campaign (Fix: was missing)
+                lastProductUsed:
+                  cleaningEventForm.productCode || n.lastProductUsed,
+                cleaningReason: cleaningEventForm.cleaningReason,
+                currentCampaignBatches: 0,
                 updatedAt: now,
                 changeHistory: [
                   ...n.changeHistory,
