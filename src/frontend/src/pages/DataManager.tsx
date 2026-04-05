@@ -60,6 +60,15 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import {
+  ClipboardList,
+  Copy,
+  Lock,
+  PauseCircle,
+  PlayCircle,
+  Sparkles,
+  StopCircle,
+} from "lucide-react";
 import React, {
   useCallback,
   useEffect,
@@ -70,12 +79,16 @@ import React, {
 import { toast } from "sonner";
 import { HelpPanel } from "../components/HelpPanel";
 import { ReportDialog } from "../components/ReportDialog";
+import RequiredLabel from "../components/RequiredLabel";
 import { helpContent } from "../data/helpContent";
 import {
   type ChangeEntry,
   type EntityType,
   type EquipmentNode,
   INITIAL_DATA,
+  type LogbookAction,
+  type LogbookEntry,
+  type StatusHistoryEntry,
 } from "../lib/equipmentNodes";
 import {
   type CleaningLevel,
@@ -101,12 +114,22 @@ import {
   getProductByCode,
   updateProduct,
 } from "../lib/productMaster";
+import { logCleaningEvent } from "../services/cleaningEventLog";
 import {
   type CleaningBadge,
   computeCleaningBadge,
   computeCleaningValidTill,
   getCleaningBadgeStyle,
 } from "../services/cleaningValidationService";
+import { validateExecution as validateExecutionOrchestrator } from "../services/executionService";
+import type { ExecutionValidationResult } from "../services/executionService";
+import {
+  IDENTIFIER_HINTS,
+  generateIdentifier,
+  sanitizeIdentifier,
+  validateIdentifierFormat,
+  validateIdentifierUniqueness,
+} from "../services/identifierService";
 import {
   canApprove,
   canDelete,
@@ -118,6 +141,10 @@ import {
   getStatusBadgeClass,
 } from "../utils/dmRules";
 import { validateNewRecord, validateRecord } from "../utils/dmValidation";
+import {
+  isFieldRequired,
+  validateRequiredFields,
+} from "../utils/entityRequiredFields";
 
 const PAGE_SIZE = 15;
 const CURRENT_USER = "Dr. Sarah Chen";
@@ -337,6 +364,46 @@ export default function DataManager() {
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
+  // ── New feature states ────────────────────────────────────────────────
+  // Approve reason dialog
+  const [approveReasonDialogOpen, setApproveReasonDialogOpen] = useState(false);
+  const [approveReason, setApproveReason] = useState("");
+  // Delete reason dialog
+  const [deleteReasonDialogOpen, setDeleteReasonDialogOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  // Copy as Draft dialog
+  const [copyDraftDialogOpen, setCopyDraftDialogOpen] = useState(false);
+  const [copyDraftReason, setCopyDraftReason] = useState("");
+  // Interlock validation result (from orchestrator)
+  const [interlockValidationResult, setInterlockValidationResult] =
+    useState<ExecutionValidationResult | null>(null);
+  // Override interlock dialog
+  const [overrideReasonDialogOpen, setOverrideReasonDialogOpen] =
+    useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  // Log cleaning event dialog
+  const [cleaningEventDialogOpen, setCleaningEventDialogOpen] = useState(false);
+  const [cleaningEventForm, setCleaningEventForm] = useState({
+    cleanedBy: "",
+    cleaningReason: "",
+    productCode: "",
+    validTill: "",
+  });
+  // Identifier format error for new dialog
+  const [identifierFormatError, setIdentifierFormatError] = useState("");
+
+  // Auto-generate identifier when new dialog opens or entity type changes
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  useEffect(() => {
+    if (newDialogOpen) {
+      const entityType = newNode.entityType as EntityType;
+      const generated = generateIdentifier(entityType, nodesRef.current);
+      setNewNode((prev) => ({ ...prev, identifier: generated }));
+      setIdentifierFormatError("");
+    }
+  }, [newDialogOpen, newNode.entityType]);
+
   const filtered = useMemo(
     () =>
       nodes.filter(
@@ -468,6 +535,8 @@ export default function DataManager() {
       const now = new Date().toISOString();
       const prev = nodes.find((n) => n.id === draft.id);
       const changes: ChangeEntry[] = [];
+      // Campaign reset on product code change
+      let campaignResetEntry: ChangeEntry | null = null;
       if (prev) {
         const fields = Object.keys(draft) as (keyof EquipmentNode)[];
         for (const f of fields) {
@@ -491,14 +560,36 @@ export default function DataManager() {
             });
           }
         }
+        // Campaign reset logic: if lastProductUsed changed, reset currentCampaignBatches
+        if (
+          draft.lastProductUsed !== prev.lastProductUsed &&
+          draft.lastProductUsed !== undefined &&
+          draft.lastProductUsed !== ""
+        ) {
+          campaignResetEntry = {
+            timestamp: now,
+            field: "currentCampaignBatches",
+            oldValue: String(prev.currentCampaignBatches ?? 0),
+            newValue: "0",
+            changedBy: CURRENT_USER,
+            action: "Update" as const,
+            reason: "Product code changed — campaign reset",
+          };
+        }
       }
+      const allChanges = campaignResetEntry
+        ? [...changes, campaignResetEntry]
+        : changes;
+      const savedDraft = campaignResetEntry
+        ? { ...draft, currentCampaignBatches: 0 }
+        : draft;
       setNodes((prevNodes) =>
         prevNodes.map((n) =>
           n.id === draft.id
             ? {
-                ...draft,
+                ...savedDraft,
                 updatedAt: now,
-                changeHistory: [...draft.changeHistory, ...changes],
+                changeHistory: [...draft.changeHistory, ...allChanges],
               }
             : n,
         ),
@@ -507,7 +598,13 @@ export default function DataManager() {
       setDraft(null);
       setFormErrors({});
       setSaveConfirmOpen(false);
-      toast.success("Changes saved successfully");
+      if (campaignResetEntry) {
+        toast.success(
+          "Changes saved. Campaign batches reset due to product change.",
+        );
+      } else {
+        toast.success("Changes saved successfully");
+      }
     } catch (err) {
       toast.error("Something went wrong. Please try again");
       console.error(err);
@@ -527,32 +624,44 @@ export default function DataManager() {
       toast.error("Only Draft records can be approved");
       return;
     }
+    // Open mandatory reason dialog
+    setApproveReason("");
+    setApproveReasonDialogOpen(true);
+  };
+
+  const handleConfirmApprove = () => {
+    if (!selected) return;
+    if (!approveReason.trim()) {
+      toast.error("Approval reason is required");
+      return;
+    }
     try {
       const now = new Date().toISOString();
-      setNodes((prev) => {
-        return prev.map((n) => {
-          if (n.id === selected.id) {
-            return {
-              ...n,
-              status: "Approved" as GmpStatus,
-              updatedAt: now,
-              changeHistory: [
-                ...n.changeHistory,
-                {
-                  timestamp: now,
-                  field: "status",
-                  oldValue: n.status ?? "Draft",
-                  newValue: "Approved",
-                  changedBy: CURRENT_USER,
-                  action: "Update" as const,
-                  reason: "GMP Status Approval",
-                },
-              ],
-            };
-          }
-          return n;
-        });
-      });
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === selected.id
+            ? {
+                ...n,
+                status: "Approved" as GmpStatus,
+                updatedAt: now,
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "status",
+                    oldValue: n.status ?? "Draft",
+                    newValue: "Approved",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: approveReason,
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setApproveReasonDialogOpen(false);
+      setApproveReason("");
       toast.success("Record approved successfully");
     } catch (err) {
       toast.error("Something went wrong. Please try again");
@@ -624,15 +733,23 @@ export default function DataManager() {
       toast.error(getDeleteTooltip(ruleRecord));
       return;
     }
-    if (
-      !confirm(
-        `Delete "${selected.shortDescription}"? This action cannot be undone.`,
-      )
-    )
+    // Open mandatory reason dialog
+    setDeleteReason("");
+    setDeleteReasonDialogOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!selected) return;
+    if (!deleteReason.trim()) {
+      toast.error("Deletion reason is required");
       return;
+    }
     try {
+      // Log deletion with reason in change history before removing
       setNodes((prev) => prev.filter((n) => n.id !== selected.id));
       setSelectedId(null);
+      setDeleteReasonDialogOpen(false);
+      setDeleteReason("");
       toast.success("Item deleted successfully");
     } catch (err) {
       toast.error("Something went wrong. Please try again");
@@ -641,11 +758,35 @@ export default function DataManager() {
   };
 
   const handleCreate = () => {
-    // Validate new record fields
-    const validation = validateNewRecord({
-      identifier: newNode.identifier,
-      shortDescription: newNode.shortDescription,
-    });
+    // Validate new record fields with entity-type-specific required fields
+    const effectiveEntityType = newNode.entityType as EntityType;
+    const validation = validateNewRecord(
+      {
+        identifier: newNode.identifier,
+        shortDescription: newNode.shortDescription,
+        parentId: newNode.parentId ?? "",
+        manufacturer: newNode.manufacturer ?? "",
+        serialNumber: newNode.serialNumber ?? "",
+        stationId: newNode.stationId ?? "",
+      },
+      effectiveEntityType,
+    );
+    // Also check identifier format
+    const fmtCheck = validateIdentifierFormat(newNode.identifier);
+    if (!fmtCheck.valid) {
+      setNewFormErrors((fe) => ({ ...fe, identifier: fmtCheck.message }));
+      return;
+    }
+    // Check identifier uniqueness
+    const uniqCheck = validateIdentifierUniqueness(
+      newNode.identifier,
+      effectiveEntityType,
+      nodes,
+    );
+    if (!uniqCheck.unique) {
+      setNewFormErrors((fe) => ({ ...fe, identifier: uniqCheck.message }));
+      return;
+    }
     if (!validation.valid) {
       setNewFormErrors(validation.errors);
       return;
@@ -676,8 +817,66 @@ export default function DataManager() {
       setNewDialogOpen(false);
       setNewNode({ ...EMPTY_NODE });
       setNewFormErrors({});
+      setIdentifierFormatError("");
       setSelectedId(id);
       toast.success("New item created successfully");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
+  };
+
+  // ── Copy as Draft ──────────────────────────────────────────────────────────
+  const handleCopyAsDraft = () => {
+    if (!selected) return;
+    setCopyDraftReason("");
+    setCopyDraftDialogOpen(true);
+  };
+
+  const handleConfirmCopyAsDraft = () => {
+    if (!selected) return;
+    if (!copyDraftReason.trim()) {
+      toast.error("Reason is required for Copy as Draft");
+      return;
+    }
+    try {
+      const now = new Date().toISOString();
+      const originalIdentifier = selected.identifier;
+      const newIdentifier = generateIdentifier(selected.entityType, nodes);
+      const newId = `node_${Date.now()}_copy`;
+      const copiedNode: EquipmentNode = {
+        ...selected,
+        id: newId,
+        identifier: newIdentifier,
+        status: "Draft" as GmpStatus,
+        cleaningStatus: "Due",
+        currentCampaignBatches: 0,
+        lastCleanedAt: undefined,
+        cleaningValidTill: undefined,
+        versionNumber: 1,
+        originalId: null,
+        revisedById: null,
+        createdAt: now,
+        updatedAt: now,
+        createdBy: CURRENT_USER,
+        isUsedInBatch: false,
+        changeHistory: [
+          {
+            timestamp: now,
+            field: "*",
+            oldValue: "",
+            newValue: `Copied from ${originalIdentifier}`,
+            changedBy: CURRENT_USER,
+            action: "Create" as const,
+            reason: copyDraftReason,
+          },
+        ],
+      };
+      setNodes((prev) => [...prev, copiedNode]);
+      setSelectedId(newId);
+      setCopyDraftDialogOpen(false);
+      setCopyDraftReason("");
+      toast.success(`Record copied as Draft: ${newIdentifier}`);
     } catch (err) {
       toast.error("Something went wrong. Please try again");
       console.error(err);
@@ -875,7 +1074,133 @@ export default function DataManager() {
       equipmentId: selected.identifier,
     });
     setValidateResult(result);
+    // Also run the interlock orchestrator for richer interlock details
+    if (
+      selected.entityType === "EquipmentEntity" ||
+      selected.entityType === "EquipmentClass"
+    ) {
+      const orchestratorResult = validateExecutionOrchestrator({
+        equipment: selected,
+        equipmentId: selected.id,
+        targetProductCode: selected.lastProductUsed,
+      });
+      setInterlockValidationResult(orchestratorResult);
+    } else {
+      setInterlockValidationResult(null);
+    }
     setValidateDialogOpen(true);
+  };
+
+  const handleConfirmOverride = () => {
+    if (!selected) return;
+    if (!overrideReason.trim()) {
+      toast.error("Override reason is mandatory");
+      return;
+    }
+    try {
+      // Log override in audit trail
+      const now = new Date().toISOString();
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === selected.id
+            ? {
+                ...n,
+                updatedAt: now,
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "interlock_override",
+                    oldValue: "BLOCKED",
+                    newValue: "OVERRIDDEN",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: `Soft interlock override: ${overrideReason}`,
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setOverrideReasonDialogOpen(false);
+      setOverrideReason("");
+      toast.warning("Override logged. Proceed with caution.");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
+  };
+
+  const _handleOpenCleaningEventDialog = () => {
+    const cNode = editMode ? draft : selected;
+    if (!cNode) return;
+    setCleaningEventForm({
+      cleanedBy: CURRENT_USER,
+      cleaningReason: "",
+      productCode: cNode.lastProductUsed ?? "",
+      validTill: cNode.cleaningValidTill
+        ? cNode.cleaningValidTill.split("T")[0]
+        : "",
+    });
+    setCleaningEventDialogOpen(true);
+  };
+
+  const handleConfirmCleaningEvent = () => {
+    const cNode = editMode ? draft : selected;
+    if (!cNode) return;
+    if (!cleaningEventForm.cleaningReason.trim()) {
+      toast.error("Cleaning reason is required");
+      return;
+    }
+    try {
+      logCleaningEvent({
+        equipmentId: cNode.id,
+        equipmentIdentifier: cNode.identifier,
+        cleanedBy: cleaningEventForm.cleanedBy,
+        cleaningReason: cleaningEventForm.cleaningReason,
+        productCode: cleaningEventForm.productCode,
+        cleanedAt: new Date().toISOString(),
+        validTill: cleaningEventForm.validTill
+          ? new Date(cleaningEventForm.validTill).toISOString()
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      // Update node cleaning status to Clean
+      const now = new Date().toISOString();
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === cNode.id
+            ? {
+                ...n,
+                cleaningStatus: "Clean",
+                lastCleanedAt: now,
+                cleaningValidTill: cleaningEventForm.validTill
+                  ? new Date(cleaningEventForm.validTill).toISOString()
+                  : new Date(
+                      Date.now() + 30 * 24 * 60 * 60 * 1000,
+                    ).toISOString(),
+                updatedAt: now,
+                changeHistory: [
+                  ...n.changeHistory,
+                  {
+                    timestamp: now,
+                    field: "cleaningStatus",
+                    oldValue: n.cleaningStatus ?? "Due",
+                    newValue: "Clean",
+                    changedBy: CURRENT_USER,
+                    action: "Update" as const,
+                    reason: `Cleaning event logged: ${cleaningEventForm.cleaningReason}`,
+                  },
+                ],
+              }
+            : n,
+        ),
+      );
+      setCleaningEventDialogOpen(false);
+      toast.success("Cleaning event logged");
+    } catch (err) {
+      toast.error("Something went wrong. Please try again");
+      console.error(err);
+    }
   };
 
   const currentNode = selectedId
@@ -1994,6 +2319,19 @@ export default function DataManager() {
                           <CheckCircle2 size={12} /> Validate
                         </Button>
                       )}
+                      {/* Copy as Draft — available for Draft and Approved records */}
+                      {(currentNode.status === "Draft" ||
+                        currentNode.status === "Approved") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-[12px] px-3 text-indigo-700 border-indigo-300 hover:bg-indigo-50"
+                          onClick={handleCopyAsDraft}
+                          data-ocid="data_manager.copy_draft_button"
+                        >
+                          <Copy size={12} /> Copy as Draft
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -2119,13 +2457,6 @@ export default function DataManager() {
                         Specification
                       </TabsTrigger>
                       <TabsTrigger
-                        value="process"
-                        className="h-6 px-3 text-[11.5px]"
-                        data-ocid="data_manager.process.tab"
-                      >
-                        Process
-                      </TabsTrigger>
-                      <TabsTrigger
                         value="engineering"
                         className="h-6 px-3 text-[11.5px]"
                         data-ocid="data_manager.engineering.tab"
@@ -2134,11 +2465,11 @@ export default function DataManager() {
                       </TabsTrigger>
                       {isEquipmentNode(currentNode) && (
                         <TabsTrigger
-                          value="cleaning"
+                          value="context"
                           className="h-6 px-3 text-[11.5px]"
-                          data-ocid="data_manager.cleaning.tab"
+                          data-ocid="data_manager.context.tab"
                         >
-                          Cleaning
+                          Context
                         </TabsTrigger>
                       )}
                       <TabsTrigger
@@ -2148,7 +2479,13 @@ export default function DataManager() {
                       >
                         Logbook
                       </TabsTrigger>
-
+                      <TabsTrigger
+                        value="status_history"
+                        className="h-6 px-3 text-[11.5px]"
+                        data-ocid="data_manager.status_history.tab"
+                      >
+                        Status History
+                      </TabsTrigger>
                       <TabsTrigger
                         value="history"
                         className="h-6 px-3 text-[11.5px]"
@@ -2165,31 +2502,49 @@ export default function DataManager() {
                     className="flex-1 overflow-auto px-5 pb-5 mt-3 min-h-0 max-h-[calc(100vh-220px)]"
                   >
                     <SectionHeader title="Asset Attributes" />
-                    <FieldRow label="Identifier">
+                    <div className="grid grid-cols-[160px_1fr] items-start gap-2 py-1.5">
+                      <RequiredLabel
+                        label="Identifier"
+                        required={isFieldRequired(
+                          currentNode.entityType as EntityType,
+                          "identifier",
+                        )}
+                        className="text-[11.5px] font-medium text-muted-foreground pt-2 leading-tight"
+                      />
                       <div>
-                        <Input
-                          disabled={!editMode}
-                          value={
-                            editMode
-                              ? (draft?.identifier ?? currentNode.identifier)
-                              : currentNode.identifier
-                          }
-                          onChange={(e) => {
-                            setDraft(
-                              (d) => d && { ...d, identifier: e.target.value },
-                            );
-                            if (formErrors.identifier)
-                              setFormErrors((fe) => ({
-                                ...fe,
-                                identifier: "",
-                              }));
-                          }}
-                          className={cn(
-                            "h-7 text-[12px]",
-                            formErrors.identifier && "border-destructive",
+                        <div className="relative">
+                          <Input
+                            readOnly={editMode}
+                            disabled={!editMode}
+                            value={
+                              editMode
+                                ? (draft?.identifier ?? currentNode.identifier)
+                                : currentNode.identifier
+                            }
+                            className={cn(
+                              "h-7 text-[12px]",
+                              editMode &&
+                                "bg-gray-100 cursor-not-allowed opacity-70 pr-8",
+                              formErrors.identifier && "border-destructive",
+                            )}
+                            data-ocid="data_manager.identifier.input"
+                          />
+                          {editMode && (
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Lock
+                                    size={12}
+                                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"
+                                  />
+                                </TooltipTrigger>
+                                <TooltipContent side="top">
+                                  Identifier is locked after creation
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           )}
-                          data-ocid="data_manager.identifier.input"
-                        />
+                        </div>
                         {formErrors.identifier && (
                           <p
                             className="text-[11px] text-destructive mt-0.5"
@@ -2199,8 +2554,16 @@ export default function DataManager() {
                           </p>
                         )}
                       </div>
-                    </FieldRow>
-                    <FieldRow label="Short Description">
+                    </div>
+                    <div className="grid grid-cols-[160px_1fr] items-start gap-2 py-1.5">
+                      <RequiredLabel
+                        label="Short Description"
+                        required={isFieldRequired(
+                          currentNode.entityType as EntityType,
+                          "shortDescription",
+                        )}
+                        className="text-[11.5px] font-medium text-muted-foreground pt-2 leading-tight"
+                      />
                       <div>
                         <Input
                           disabled={!editMode}
@@ -2235,7 +2598,7 @@ export default function DataManager() {
                           </p>
                         )}
                       </div>
-                    </FieldRow>
+                    </div>
                     <FieldRow label="Description">
                       <Textarea
                         disabled={!editMode}
@@ -2513,37 +2876,108 @@ export default function DataManager() {
                     value="spec"
                     className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
-                    <SectionHeader title="Specification" />
-                    <FieldRow label="Equipment Class">
-                      <Input
-                        readOnly
-                        value={ENTITY_TYPE_LABELS[currentNode.entityType]}
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Level">
-                      <Input
-                        readOnly
-                        value={currentNode.level}
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Status">
-                      <Input
-                        readOnly
-                        value={currentNode.disposed ? "Disposed" : "Active"}
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Manufacturer">
-                      <Input
-                        readOnly
-                        value={currentNode.manufacturer || "—"}
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-
-                    {currentNode.entityType === "PropertyType" && (
+                    {isEquipmentNode(currentNode) ? (
+                      <>
+                        <SectionHeader title="Equipment Specification" />
+                        {/* Equipment Type — read-only badge */}
+                        <FieldRow label="Equipment Type">
+                          <div className="flex items-center gap-2 h-7">
+                            {(() => {
+                              const et = currentNode.equipmentType;
+                              if (!et)
+                                return (
+                                  <span className="text-[12px] text-muted-foreground px-2 py-0.5 rounded border bg-gray-50 border-gray-200">
+                                    Not Set
+                                  </span>
+                                );
+                              return (
+                                <span
+                                  className={cn(
+                                    "text-[12px] font-semibold px-2.5 py-0.5 rounded border",
+                                    et === "Fixed"
+                                      ? "bg-blue-50 text-blue-700 border-blue-200"
+                                      : "bg-teal-50 text-teal-700 border-teal-200",
+                                  )}
+                                >
+                                  {et}
+                                </span>
+                              );
+                            })()}
+                          </div>
+                        </FieldRow>
+                        {/* Cleaning Type — editable */}
+                        <FieldRow label="Cleaning Type">
+                          {editMode ? (
+                            <Select
+                              value={draft?.cleaningType ?? "none"}
+                              onValueChange={(v) =>
+                                setDraft(
+                                  (d) =>
+                                    d && {
+                                      ...d,
+                                      cleaningType:
+                                        v === "none"
+                                          ? undefined
+                                          : (v as "CIP" | "Manual" | "None"),
+                                    },
+                                )
+                              }
+                            >
+                              <SelectTrigger className="h-7 text-[12px]">
+                                <SelectValue placeholder="— Not Set —" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem
+                                  value="none"
+                                  className="text-[12px]"
+                                >
+                                  — Not Set —
+                                </SelectItem>
+                                <SelectItem value="CIP" className="text-[12px]">
+                                  CIP (Clean-In-Place)
+                                </SelectItem>
+                                <SelectItem
+                                  value="Manual"
+                                  className="text-[12px]"
+                                >
+                                  Manual
+                                </SelectItem>
+                                <SelectItem
+                                  value="None"
+                                  className="text-[12px]"
+                                >
+                                  None
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          ) : (
+                            <div className="h-7 flex items-center">
+                              <span className="text-[12px] text-foreground">
+                                {currentNode.cleaningType ?? "—"}
+                              </span>
+                            </div>
+                          )}
+                        </FieldRow>
+                        {/* Requires Cleaning — read-only badge */}
+                        <FieldRow label="Requires Cleaning">
+                          <div className="flex items-center gap-2 h-7">
+                            {currentNode.requiresCleaning === true ? (
+                              <span className="text-[12px] font-semibold px-2.5 py-0.5 rounded border bg-green-50 text-green-700 border-green-200">
+                                Required
+                              </span>
+                            ) : currentNode.requiresCleaning === false ? (
+                              <span className="text-[12px] font-semibold px-2.5 py-0.5 rounded border bg-gray-50 text-gray-500 border-gray-200">
+                                Not Required
+                              </span>
+                            ) : (
+                              <span className="text-[12px] text-muted-foreground">
+                                Not Set
+                              </span>
+                            )}
+                          </div>
+                        </FieldRow>
+                      </>
+                    ) : currentNode.entityType === "PropertyType" ? (
                       <>
                         <SectionHeader title="Range & Capability" />
                         <FieldRow label="Min Value">
@@ -2673,117 +3107,16 @@ export default function DataManager() {
                           </p>
                         </div>
                       </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
+                        <span className="text-[11px] uppercase tracking-widest font-semibold mb-2">
+                          {ENTITY_TYPE_LABELS[currentNode.entityType]}
+                        </span>
+                        <p className="text-[12px]">
+                          No simplified specification data for this entity type.
+                        </p>
+                      </div>
                     )}
-                  </TabsContent>
-
-                  {/* PROCESS TAB */}
-                  <TabsContent
-                    value="process"
-                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
-                  >
-                    <SectionHeader title="Process Configuration" />
-                    <div className="mb-3 text-[11.5px] text-muted-foreground">
-                      Process parameters and operating conditions for this
-                      entity.
-                    </div>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="text-[11px] h-7">
-                            Parameter
-                          </TableHead>
-                          <TableHead className="text-[11px] h-7">
-                            Value
-                          </TableHead>
-                          <TableHead className="text-[11px] h-7">
-                            Unit
-                          </TableHead>
-                          <TableHead className="text-[11px] h-7">Min</TableHead>
-                          <TableHead className="text-[11px] h-7">Max</TableHead>
-                          <TableHead className="text-[11px] h-7">
-                            Type
-                          </TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {[
-                          {
-                            param: "Operating Temperature",
-                            value: "25",
-                            unit: "°C",
-                            min: "15",
-                            max: "30",
-                            type: "Process",
-                          },
-                          {
-                            param: "Relative Humidity",
-                            value: "45",
-                            unit: "%",
-                            min: "30",
-                            max: "60",
-                            type: "Process",
-                          },
-                          {
-                            param: "Pressure",
-                            value: "1.0",
-                            unit: "bar",
-                            min: "0.8",
-                            max: "1.2",
-                            type: "Process",
-                          },
-                          {
-                            param: "Calibration Interval",
-                            value: "365",
-                            unit: "days",
-                            min: "—",
-                            max: "—",
-                            type: "Maintenance",
-                          },
-                          {
-                            param: "Max Load Capacity",
-                            value: "See Spec Sheet",
-                            unit: "—",
-                            min: "—",
-                            max: "—",
-                            type: "Specification",
-                          },
-                          {
-                            param: "Cleaning Status",
-                            value: "Not Set",
-                            unit: "—",
-                            min: "—",
-                            max: "—",
-                            type: "Compliance",
-                          },
-                        ].map((row, idx) => (
-                          <TableRow
-                            key={row.param}
-                            data-ocid={`data_manager.process.item.${idx + 1}`}
-                          >
-                            <TableCell className="text-[11px] py-1.5 font-medium">
-                              {row.param}
-                            </TableCell>
-                            <TableCell className="text-[11px] py-1.5 font-mono">
-                              {row.value}
-                            </TableCell>
-                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
-                              {row.unit}
-                            </TableCell>
-                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
-                              {row.min}
-                            </TableCell>
-                            <TableCell className="text-[11px] py-1.5 text-muted-foreground">
-                              {row.max}
-                            </TableCell>
-                            <TableCell className="text-[11px] py-1.5">
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
-                                {row.type}
-                              </span>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
                   </TabsContent>
 
                   {/* ENGINEERING TAB */}
@@ -2791,43 +3124,7 @@ export default function DataManager() {
                     value="engineering"
                     className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
-                    <SectionHeader title="Engineering Data" />
-                    <FieldRow label="Data OPS path">
-                      <Input
-                        readOnly
-                        value={currentNode.dataOpsPath || "—"}
-                        className="h-7 text-[12px] font-mono bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Automation server">
-                      <Input
-                        readOnly
-                        value={
-                          currentNode.automationServerName ||
-                          currentNode.automationServerNameDefault
-                        }
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Historian server">
-                      <Input
-                        readOnly
-                        value={
-                          currentNode.historianServer ||
-                          currentNode.historianServerDefault
-                        }
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Serial Number">
-                      <Input
-                        readOnly
-                        value={currentNode.serialNumber || "—"}
-                        className="h-7 text-[12px] bg-muted/50"
-                      />
-                    </FieldRow>
-
-                    {isEquipmentNode(currentNode) && (
+                    {isEquipmentNode(currentNode) ? (
                       <>
                         <SectionHeader title="Equipment Hierarchy & Type" />
                         <FieldRow label="Equipment Type">
@@ -3175,597 +3472,152 @@ export default function DataManager() {
                           })()}
                         </FieldRow>
                       </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
+                        <p className="text-[12px]">
+                          No engineering data for this entity type.
+                        </p>
+                      </div>
                     )}
                   </TabsContent>
 
-                  {/* CLEANING TAB */}
+                  {/* CONTEXT TAB — Equipment only */}
                   {isEquipmentNode(currentNode) && (
                     <TabsContent
-                      value="cleaning"
+                      value="context"
                       className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                     >
-                      <SectionHeader title="Advanced Cleaning Status" />
                       {(() => {
-                        const cNode = editMode ? draft : currentNode;
-                        if (!cNode) return null;
-                        const cb = computeCleaningBadge({
-                          equipmentId: cNode.id,
-                          equipmentType: cNode.equipmentType,
-                          lastCleanedAt: cNode.lastCleanedAt,
-                          cleaningValidTill: cNode.cleaningValidTill,
-                          lastProductUsed: cNode.lastProductUsed,
-                          cleaningReason: cNode.cleaningReason,
-                          currentCampaignBatches: cNode.currentCampaignBatches,
-                        });
-                        const matchedProduct = cNode.lastProductUsed
-                          ? getProductByCode(cNode.lastProductUsed)
-                          : null;
+                        const hasCurrentBatch = !!currentNode.currentBatchId;
+                        const hasPreviousData = !!(
+                          currentNode.lastBatch ||
+                          currentNode.lastExecutionDate ||
+                          currentNode.lastProductUsed
+                        );
                         return (
-                          <div className="space-y-3 mb-4">
-                            {/* Badge */}
-                            <div
-                              className={cn(
-                                "flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-semibold",
-                                getCleaningBadgeStyle(cb),
-                              )}
-                            >
-                              {cb === "Clean" ? (
-                                <CheckCircle2 size={14} />
-                              ) : cb === "Due" ? (
-                                <AlertTriangle size={14} />
-                              ) : (
-                                <XCircle size={14} />
-                              )}
-                              Cleaning Status: {cb}
-                              {cb !== "Clean" && (
-                                <span className="font-normal text-[11px] ml-1">
-                                  {cb === "Expired"
-                                    ? "— Equipment must be re-cleaned before execution"
-                                    : "— Cleaning expires soon"}
+                          <div className="space-y-4">
+                            {/* Current Execution */}
+                            <div>
+                              <div className="flex items-center gap-2 mb-3">
+                                <span
+                                  className={cn(
+                                    "inline-block w-2 h-2 rounded-full",
+                                    hasCurrentBatch
+                                      ? "bg-green-500 animate-pulse"
+                                      : "bg-gray-300",
+                                  )}
+                                />
+                                <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                                  Current Execution
                                 </span>
+                              </div>
+                              {hasCurrentBatch ? (
+                                <div className="grid grid-cols-1 gap-2">
+                                  <div className="p-3 rounded-lg border border-border bg-teal-50/60">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Product Code
+                                    </p>
+                                    <p className="text-[13px] font-semibold text-foreground font-mono">
+                                      {currentNode.lastProductUsed ?? "—"}
+                                    </p>
+                                  </div>
+                                  <div className="p-3 rounded-lg border border-border bg-teal-50/60">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Batch ID
+                                    </p>
+                                    <p className="text-[13px] font-semibold text-foreground font-mono">
+                                      {currentNode.currentBatchId}
+                                    </p>
+                                  </div>
+                                  <div className="p-3 rounded-lg border border-border bg-teal-50/60">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Status
+                                    </p>
+                                    <span
+                                      className={cn(
+                                        "text-[12px] font-semibold px-2.5 py-0.5 rounded border",
+                                        currentNode.currentBatchStatus ===
+                                          "In Process" &&
+                                          "bg-blue-50 text-blue-700 border-blue-200",
+                                        currentNode.currentBatchStatus ===
+                                          "Released" &&
+                                          "bg-amber-50 text-amber-700 border-amber-200",
+                                        currentNode.currentBatchStatus ===
+                                          "Completed" &&
+                                          "bg-green-50 text-green-700 border-green-200",
+                                        ![
+                                          "In Process",
+                                          "Released",
+                                          "Completed",
+                                        ].includes(
+                                          currentNode.currentBatchStatus ?? "",
+                                        ) &&
+                                          "bg-gray-50 text-gray-600 border-gray-200",
+                                      )}
+                                    >
+                                      {currentNode.currentBatchStatus}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="py-4 text-center text-[12px] text-muted-foreground bg-muted/30 rounded-lg border border-border">
+                                  No active execution
+                                </div>
                               )}
                             </div>
 
-                            {/* Advanced Cleaning Fields */}
-                            <FieldRow label="Last Cleaned At">
-                              <Input
-                                type="date"
-                                disabled={!editMode}
-                                value={
-                                  (cNode.lastCleanedAt ?? "").split("T")[0]
-                                }
-                                onChange={(e) =>
-                                  setDraft(
-                                    (d) =>
-                                      d && {
-                                        ...d,
-                                        lastCleanedAt: e.target.value
-                                          ? new Date(
-                                              e.target.value,
-                                            ).toISOString()
-                                          : undefined,
-                                      },
-                                  )
-                                }
-                                className="h-7 text-[12px]"
-                              />
-                            </FieldRow>
-                            <FieldRow label="Cleaning Valid Till">
-                              <div className="flex gap-1.5">
-                                <Input
-                                  type="date"
-                                  disabled={!editMode}
-                                  value={
-                                    (cNode.cleaningValidTill ?? "").split(
-                                      "T",
-                                    )[0]
-                                  }
-                                  onChange={(e) =>
-                                    setDraft(
-                                      (d) =>
-                                        d && {
-                                          ...d,
-                                          cleaningValidTill: e.target.value
-                                            ? new Date(
-                                                e.target.value,
-                                              ).toISOString()
-                                            : undefined,
-                                        },
-                                    )
-                                  }
-                                  className="h-7 text-[12px] flex-1"
-                                />
-                                {editMode &&
-                                  cNode.lastCleanedAt &&
-                                  cNode.lastProductUsed && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 text-[11px] px-2 shrink-0"
-                                      onClick={() => {
-                                        if (
-                                          !draft?.lastCleanedAt ||
-                                          !draft?.lastProductUsed
-                                        )
-                                          return;
-                                        const computed =
-                                          computeCleaningValidTill(
-                                            draft.lastCleanedAt,
-                                            draft.lastProductUsed,
-                                          );
-                                        setDraft(
-                                          (d) =>
-                                            d && {
-                                              ...d,
-                                              cleaningValidTill: computed,
-                                            },
-                                        );
-                                      }}
-                                    >
-                                      Compute from DETH
-                                    </Button>
-                                  )}
+                            {/* Previous Execution */}
+                            <div>
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="inline-block w-2 h-2 rounded-full bg-gray-300" />
+                                <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                                  Previous Execution
+                                </span>
                               </div>
-                            </FieldRow>
-                            <FieldRow label="Last Product Used">
-                              <Input
-                                disabled={!editMode}
-                                value={cNode.lastProductUsed ?? ""}
-                                onChange={(e) =>
-                                  setDraft(
-                                    (d) =>
-                                      d && {
-                                        ...d,
-                                        lastProductUsed:
-                                          e.target.value || undefined,
-                                      },
-                                  )
-                                }
-                                placeholder="e.g. PRD-AMX-001"
-                                className="h-7 text-[12px]"
-                              />
-                            </FieldRow>
-                            <FieldRow label="Cleaning Reason">
-                              <Input
-                                disabled={!editMode}
-                                value={cNode.cleaningReason ?? ""}
-                                onChange={(e) =>
-                                  setDraft(
-                                    (d) =>
-                                      d && {
-                                        ...d,
-                                        cleaningReason:
-                                          e.target.value || undefined,
-                                      },
-                                  )
-                                }
-                                placeholder="e.g. Product changeover"
-                                className="h-7 text-[12px]"
-                              />
-                            </FieldRow>
-                            <FieldRow label="Campaign Batches">
-                              <Input
-                                type="number"
-                                disabled={!editMode}
-                                value={cNode.currentCampaignBatches ?? ""}
-                                onChange={(e) =>
-                                  setDraft(
-                                    (d) =>
-                                      d && {
-                                        ...d,
-                                        currentCampaignBatches: e.target.value
-                                          ? Number(e.target.value)
-                                          : undefined,
-                                      },
-                                  )
-                                }
-                                placeholder="0"
-                                className="h-7 text-[12px]"
-                              />
-                            </FieldRow>
-
-                            {/* Product info panel */}
-                            {matchedProduct && (
-                              <div className="p-2.5 rounded-lg bg-violet-50 border border-violet-200 text-[11.5px]">
-                                <p className="font-semibold text-violet-800 mb-1">
-                                  📦 {matchedProduct.productName} (
-                                  {matchedProduct.productCode})
-                                </p>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-violet-700">
-                                  <span>
-                                    Campaign Length:{" "}
-                                    <strong>
-                                      {matchedProduct.campaignLength} batches
-                                    </strong>
-                                  </span>
-                                  <span>
-                                    DETH:{" "}
-                                    <strong>{matchedProduct.dethTime}h</strong>
-                                  </span>
-                                  {cNode.currentCampaignBatches !==
-                                    undefined && (
-                                    <span
-                                      className={cn(
-                                        "col-span-2 font-semibold mt-0.5",
-                                        cNode.currentCampaignBatches >=
-                                          matchedProduct.campaignLength
-                                          ? "text-red-700"
-                                          : cNode.currentCampaignBatches >=
-                                              matchedProduct.campaignLength - 1
-                                            ? "text-amber-700"
-                                            : "text-green-700",
-                                      )}
-                                    >
-                                      Batches used:{" "}
-                                      {cNode.currentCampaignBatches} /{" "}
-                                      {matchedProduct.campaignLength}
-                                      {cNode.currentCampaignBatches >=
-                                      matchedProduct.campaignLength
-                                        ? " — Campaign limit reached! Cleaning required."
-                                        : cNode.currentCampaignBatches >=
-                                            matchedProduct.campaignLength - 1
-                                          ? " — Approaching campaign limit."
-                                          : ""}
-                                    </span>
-                                  )}
+                              {hasPreviousData ? (
+                                <div className="grid grid-cols-1 gap-2">
+                                  <div className="p-3 rounded-lg border border-border bg-muted/30">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Last Product
+                                    </p>
+                                    <p className="text-[13px] font-semibold text-foreground font-mono">
+                                      {currentNode.lastProductUsed ?? "—"}
+                                    </p>
+                                  </div>
+                                  <div className="p-3 rounded-lg border border-border bg-muted/30">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Last Batch
+                                    </p>
+                                    <p className="text-[13px] font-semibold text-foreground font-mono">
+                                      {currentNode.lastBatch ?? "—"}
+                                    </p>
+                                  </div>
+                                  <div className="p-3 rounded-lg border border-border bg-muted/30">
+                                    <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">
+                                      Last Execution Date
+                                    </p>
+                                    <p className="text-[13px] font-semibold text-foreground">
+                                      {currentNode.lastExecutionDate
+                                        ? new Date(
+                                            currentNode.lastExecutionDate,
+                                          ).toLocaleDateString("en-GB", {
+                                            year: "numeric",
+                                            month: "short",
+                                            day: "2-digit",
+                                          })
+                                        : "—"}
+                                    </p>
+                                  </div>
                                 </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      <SectionHeader title="Cleaning Status (Legacy)" />
-                      {(() => {
-                        const cs = computeCleaningStatus(
-                          (editMode
-                            ? draft?.cleaningLog
-                            : currentNode.cleaningLog) ?? null,
-                          (editMode
-                            ? draft?.cleaningRules
-                            : currentNode.cleaningRules) ?? [],
-                        );
-                        return (
-                          <div
-                            className={cn(
-                              "flex items-center gap-2 px-3 py-2 rounded-lg border text-[12px] font-semibold mb-4",
-                              {
-                                "bg-green-50 text-green-700 border-green-200":
-                                  cs === "OK",
-                                "bg-red-50 text-red-700 border-red-200":
-                                  cs === "Required",
-                              },
-                            )}
-                          >
-                            {cs === "OK" ? (
-                              <CheckCircle2 size={14} />
-                            ) : (
-                              <XCircle size={14} />
-                            )}
-                            Cleaning Status: {cs}
-                            {cs === "Required" && (
-                              <span className="font-normal text-[11px] ml-1">
-                                — Equipment must be cleaned before next use
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })()}
-
-                      <SectionHeader title="Cleaning Log" />
-                      <FieldRow label="Last Product">
-                        <Input
-                          disabled={!editMode}
-                          value={
-                            (editMode
-                              ? draft?.cleaningLog?.lastProduct
-                              : currentNode.cleaningLog?.lastProduct) ?? ""
-                          }
-                          onChange={(e) =>
-                            setDraft(
-                              (d) =>
-                                d && {
-                                  ...d,
-                                  cleaningLog: {
-                                    ...(d.cleaningLog ?? {
-                                      lastCleanedDate: "",
-                                      cleaningLevel: "None" as CleaningLevel,
-                                    }),
-                                    lastProduct: e.target.value,
-                                  },
-                                },
-                            )
-                          }
-                          className="h-7 text-[12px]"
-                          placeholder="e.g. Amoxicillin 500mg"
-                        />
-                      </FieldRow>
-                      <FieldRow label="Last Cleaned Date">
-                        <Input
-                          type="date"
-                          disabled={!editMode}
-                          value={
-                            (editMode
-                              ? draft?.cleaningLog?.lastCleanedDate
-                              : currentNode.cleaningLog?.lastCleanedDate) ?? ""
-                          }
-                          onChange={(e) =>
-                            setDraft(
-                              (d) =>
-                                d && {
-                                  ...d,
-                                  cleaningLog: {
-                                    ...(d.cleaningLog ?? {
-                                      lastProduct: "",
-                                      cleaningLevel: "None" as CleaningLevel,
-                                    }),
-                                    lastCleanedDate: e.target.value,
-                                  },
-                                },
-                            )
-                          }
-                          className="h-7 text-[12px]"
-                        />
-                      </FieldRow>
-                      <FieldRow label="Cleaning Level">
-                        <Select
-                          disabled={!editMode}
-                          value={
-                            (editMode
-                              ? draft?.cleaningLog?.cleaningLevel
-                              : currentNode.cleaningLog?.cleaningLevel) ??
-                            "None"
-                          }
-                          onValueChange={(v) =>
-                            setDraft(
-                              (d) =>
-                                d && {
-                                  ...d,
-                                  cleaningLog: {
-                                    ...(d.cleaningLog ?? {
-                                      lastProduct: "",
-                                      lastCleanedDate: "",
-                                    }),
-                                    cleaningLevel: v as CleaningLevel,
-                                  },
-                                },
-                            )
-                          }
-                        >
-                          <SelectTrigger className="h-7 text-[12px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="None" className="text-[12px]">
-                              None
-                            </SelectItem>
-                            <SelectItem value="Minor" className="text-[12px]">
-                              Minor
-                            </SelectItem>
-                            <SelectItem value="Major" className="text-[12px]">
-                              Major
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </FieldRow>
-
-                      <SectionHeader title="Cleaning Rules" />
-                      {(
-                        (editMode
-                          ? draft?.cleaningRules
-                          : currentNode.cleaningRules) ?? []
-                      ).length === 0 ? (
-                        <p className="text-[11.5px] text-muted-foreground py-2">
-                          No cleaning rules defined.
-                        </p>
-                      ) : (
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="text-[11px] h-7">
-                                Previous Product
-                              </TableHead>
-                              <TableHead className="text-[11px] h-7">
-                                Next Product
-                              </TableHead>
-                              <TableHead className="text-[11px] h-7">
-                                Required Level
-                              </TableHead>
-                              {editMode && (
-                                <TableHead className="text-[11px] h-7 w-8" />
+                              ) : (
+                                <div className="py-4 text-center text-[12px] text-muted-foreground bg-muted/30 rounded-lg border border-border">
+                                  No previous execution data
+                                </div>
                               )}
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {(
-                              (editMode
-                                ? draft?.cleaningRules
-                                : currentNode.cleaningRules) ?? []
-                            ).map((rule, ridx) => (
-                              <TableRow
-                                key={rule.id}
-                                data-ocid={`data_manager.cleaning_rule.${ridx + 1}`}
-                              >
-                                <TableCell className="py-1 text-[11px]">
-                                  {editMode ? (
-                                    <Input
-                                      value={rule.previousProduct}
-                                      onChange={(e) =>
-                                        setDraft(
-                                          (d) =>
-                                            d && {
-                                              ...d,
-                                              cleaningRules: (
-                                                d.cleaningRules ?? []
-                                              ).map((r, i) =>
-                                                i === ridx
-                                                  ? {
-                                                      ...r,
-                                                      previousProduct:
-                                                        e.target.value,
-                                                    }
-                                                  : r,
-                                              ),
-                                            },
-                                        )
-                                      }
-                                      className="h-6 text-[11px] px-1.5"
-                                    />
-                                  ) : (
-                                    rule.previousProduct
-                                  )}
-                                </TableCell>
-                                <TableCell className="py-1 text-[11px]">
-                                  {editMode ? (
-                                    <Input
-                                      value={rule.nextProduct}
-                                      onChange={(e) =>
-                                        setDraft(
-                                          (d) =>
-                                            d && {
-                                              ...d,
-                                              cleaningRules: (
-                                                d.cleaningRules ?? []
-                                              ).map((r, i) =>
-                                                i === ridx
-                                                  ? {
-                                                      ...r,
-                                                      nextProduct:
-                                                        e.target.value,
-                                                    }
-                                                  : r,
-                                              ),
-                                            },
-                                        )
-                                      }
-                                      className="h-6 text-[11px] px-1.5"
-                                    />
-                                  ) : (
-                                    rule.nextProduct
-                                  )}
-                                </TableCell>
-                                <TableCell className="py-1 text-[11px]">
-                                  {editMode ? (
-                                    <Select
-                                      value={rule.requiredCleaningLevel}
-                                      onValueChange={(v) =>
-                                        setDraft(
-                                          (d) =>
-                                            d && {
-                                              ...d,
-                                              cleaningRules: (
-                                                d.cleaningRules ?? []
-                                              ).map((r, i) =>
-                                                i === ridx
-                                                  ? {
-                                                      ...r,
-                                                      requiredCleaningLevel:
-                                                        v as CleaningLevel,
-                                                    }
-                                                  : r,
-                                              ),
-                                            },
-                                        )
-                                      }
-                                    >
-                                      <SelectTrigger className="h-6 text-[11px] px-1.5">
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem
-                                          value="None"
-                                          className="text-[11px]"
-                                        >
-                                          None
-                                        </SelectItem>
-                                        <SelectItem
-                                          value="Minor"
-                                          className="text-[11px]"
-                                        >
-                                          Minor
-                                        </SelectItem>
-                                        <SelectItem
-                                          value="Major"
-                                          className="text-[11px]"
-                                        >
-                                          Major
-                                        </SelectItem>
-                                      </SelectContent>
-                                    </Select>
-                                  ) : (
-                                    <span
-                                      className={cn(
-                                        "px-1.5 py-0.5 rounded text-[10px] font-medium border",
-                                        {
-                                          "bg-gray-50 text-gray-600 border-gray-200":
-                                            rule.requiredCleaningLevel ===
-                                            "None",
-                                          "bg-amber-50 text-amber-700 border-amber-200":
-                                            rule.requiredCleaningLevel ===
-                                            "Minor",
-                                          "bg-red-50 text-red-700 border-red-200":
-                                            rule.requiredCleaningLevel ===
-                                            "Major",
-                                        },
-                                      )}
-                                    >
-                                      {rule.requiredCleaningLevel}
-                                    </span>
-                                  )}
-                                </TableCell>
-                                {editMode && (
-                                  <TableCell className="py-1">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setDraft(
-                                          (d) =>
-                                            d && {
-                                              ...d,
-                                              cleaningRules: (
-                                                d.cleaningRules ?? []
-                                              ).filter((_, i) => i !== ridx),
-                                            },
-                                        )
-                                      }
-                                      className="text-destructive hover:text-destructive/80 text-[10px] px-1"
-                                    >
-                                      ✕
-                                    </button>
-                                  </TableCell>
-                                )}
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      )}
-                      {editMode && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 text-[12px] mt-2"
-                          onClick={() =>
-                            setDraft(
-                              (d) =>
-                                d && {
-                                  ...d,
-                                  cleaningRules: [
-                                    ...(d.cleaningRules ?? []),
-                                    {
-                                      id: `cr_${Date.now()}`,
-                                      previousProduct: "",
-                                      nextProduct: "",
-                                      requiredCleaningLevel:
-                                        "None" as CleaningLevel,
-                                    },
-                                  ],
-                                },
-                            )
-                          }
-                        >
-                          <Plus size={12} /> Add Rule
-                        </Button>
-                      )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </TabsContent>
                   )}
 
@@ -3774,41 +3626,327 @@ export default function DataManager() {
                     value="logbook"
                     className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
                   >
-                    <SectionHeader title="Logbook Entries" />
-                    {currentNode.changeHistory.length === 0 ? (
+                    {isEquipmentNode(currentNode) ? (
+                      <>
+                        {/* Equipment logbook — MES action timeline */}
+                        <SectionHeader title="Equipment Logbook" />
+                        {/* Entry count summary */}
+                        {currentNode.logbookEntries &&
+                          currentNode.logbookEntries.length > 0 && (
+                            <div className="flex gap-2 flex-wrap mb-3 mt-1">
+                              {(
+                                [
+                                  "Execution Start",
+                                  "Execution Stop",
+                                  "Cleaning",
+                                  "Pause",
+                                  "Resume",
+                                ] as LogbookAction[]
+                              ).map((action) => {
+                                const count =
+                                  currentNode.logbookEntries!.filter(
+                                    (e) => e.action === action,
+                                  ).length;
+                                if (count === 0) return null;
+                                return (
+                                  <span
+                                    key={action}
+                                    className="text-[10px] px-2 py-0.5 rounded-full bg-muted border text-muted-foreground"
+                                  >
+                                    {action}: {count}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        {!currentNode.logbookEntries ||
+                        currentNode.logbookEntries.length === 0 ? (
+                          <div
+                            className="text-[12px] text-muted-foreground py-6 text-center"
+                            data-ocid="data_manager.logbook.empty_state"
+                          >
+                            No logbook entries recorded.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {[...currentNode.logbookEntries]
+                              .reverse()
+                              .map((entry: LogbookEntry, idx: number) => {
+                                const actionConfig: Record<
+                                  LogbookAction,
+                                  {
+                                    bg: string;
+                                    border: string;
+                                    badge: string;
+                                    icon: React.ReactNode;
+                                  }
+                                > = {
+                                  "Execution Start": {
+                                    bg: "bg-teal-50",
+                                    border: "border-l-teal-500",
+                                    badge:
+                                      "bg-teal-100 text-teal-700 border-teal-200",
+                                    icon: (
+                                      <PlayCircle
+                                        size={14}
+                                        className="text-teal-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  "Execution Stop": {
+                                    bg: "bg-violet-50",
+                                    border: "border-l-violet-400",
+                                    badge:
+                                      "bg-violet-100 text-violet-700 border-violet-200",
+                                    icon: (
+                                      <StopCircle
+                                        size={14}
+                                        className="text-violet-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  Cleaning: {
+                                    bg: "bg-blue-50",
+                                    border: "border-l-blue-400",
+                                    badge:
+                                      "bg-blue-100 text-blue-700 border-blue-200",
+                                    icon: (
+                                      <Sparkles
+                                        size={14}
+                                        className="text-blue-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  Pause: {
+                                    bg: "bg-amber-50",
+                                    border: "border-l-amber-400",
+                                    badge:
+                                      "bg-amber-100 text-amber-700 border-amber-200",
+                                    icon: (
+                                      <PauseCircle
+                                        size={14}
+                                        className="text-amber-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                  Resume: {
+                                    bg: "bg-green-50",
+                                    border: "border-l-green-400",
+                                    badge:
+                                      "bg-green-100 text-green-700 border-green-200",
+                                    icon: (
+                                      <PlayCircle
+                                        size={14}
+                                        className="text-green-600 shrink-0"
+                                      />
+                                    ),
+                                  },
+                                };
+                                const config = actionConfig[entry.action];
+                                return (
+                                  <div
+                                    key={entry.id}
+                                    className={cn(
+                                      "border-l-4 rounded-r-lg p-3",
+                                      config.bg,
+                                      config.border,
+                                    )}
+                                    data-ocid={`data_manager.logbook.item.${idx + 1}`}
+                                  >
+                                    {/* Row 1: icon + action badge + timestamp + user */}
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      {config.icon}
+                                      <span
+                                        className={cn(
+                                          "text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border",
+                                          config.badge,
+                                        )}
+                                      >
+                                        {entry.action}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground font-mono">
+                                        {new Date(
+                                          entry.timestamp,
+                                        ).toLocaleString("en-GB", {
+                                          day: "2-digit",
+                                          month: "short",
+                                          year: "numeric",
+                                          hour: "2-digit",
+                                          minute: "2-digit",
+                                        })}
+                                      </span>
+                                      <span className="text-[11px] text-muted-foreground ml-auto font-medium">
+                                        {entry.user}
+                                      </span>
+                                    </div>
+                                    {/* Row 2: reason */}
+                                    <p className="text-[12px] text-foreground mt-1.5">
+                                      {entry.reason}
+                                    </p>
+                                    {/* Row 3: statusChange (if present) */}
+                                    {entry.statusChange && (
+                                      <div className="flex items-center gap-1.5 mt-1">
+                                        <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                                          Status:
+                                        </span>
+                                        <span className="text-[11px] font-mono font-medium text-foreground">
+                                          {entry.statusChange}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {/* Row 4: details (if present) */}
+                                    {entry.details && (
+                                      <p className="text-[11px] text-muted-foreground italic mt-0.5">
+                                        {entry.details}
+                                      </p>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      /* Non-equipment: show change history as before */
+                      <>
+                        <SectionHeader title="Logbook Entries" />
+                        {currentNode.changeHistory.length === 0 ? (
+                          <div
+                            className="text-[12px] text-muted-foreground py-6 text-center"
+                            data-ocid="data_manager.logbook.empty_state"
+                          >
+                            No logbook entries recorded.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {[...currentNode.changeHistory]
+                              .reverse()
+                              .map((entry) => (
+                                <div
+                                  key={entry.timestamp + entry.field}
+                                  className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border"
+                                >
+                                  <Clock
+                                    size={13}
+                                    className="text-muted-foreground mt-0.5 shrink-0"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-[11.5px] font-medium text-foreground">
+                                      <span className="font-semibold">
+                                        {entry.field}
+                                      </span>{" "}
+                                      changed by {entry.changedBy}
+                                    </p>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                      {new Date(
+                                        entry.timestamp,
+                                      ).toLocaleString()}
+                                    </p>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </TabsContent>
+
+                  {/* STATUS HISTORY TAB */}
+                  <TabsContent
+                    value="status_history"
+                    className="flex-1 overflow-auto px-5 pb-5 mt-3 max-h-[calc(100vh-220px)]"
+                  >
+                    <SectionHeader title="Status History" />
+                    {!currentNode.statusHistory ||
+                    currentNode.statusHistory.length === 0 ? (
                       <div
                         className="text-[12px] text-muted-foreground py-6 text-center"
-                        data-ocid="data_manager.logbook.empty_state"
+                        data-ocid="data_manager.status_history.empty_state"
                       >
-                        No logbook entries recorded.
+                        No status changes recorded.
                       </div>
                     ) : (
-                      <div className="space-y-2">
-                        {[...currentNode.changeHistory]
-                          .reverse()
-                          .map((entry) => (
-                            <div
-                              key={entry.timestamp + entry.field}
-                              className="flex gap-3 p-3 rounded-lg bg-muted/30 border border-border"
-                            >
-                              <Clock
-                                size={13}
-                                className="text-muted-foreground mt-0.5 shrink-0"
-                              />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-[11.5px] font-medium text-foreground">
-                                  <span className="font-semibold">
-                                    {entry.field}
-                                  </span>{" "}
-                                  changed by {entry.changedBy}
-                                </p>
-                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                  {new Date(entry.timestamp).toLocaleString()}
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                      </div>
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="text-[11px] h-7">
+                              Timestamp
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              From
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              To
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Changed By
+                            </TableHead>
+                            <TableHead className="text-[11px] h-7">
+                              Reason
+                            </TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {[...(currentNode.statusHistory ?? [])]
+                            .reverse()
+                            .map((entry: StatusHistoryEntry, idx: number) => (
+                              <TableRow
+                                key={entry.timestamp + entry.fromStatus}
+                                data-ocid={`data_manager.status_history.item.${idx + 1}`}
+                              >
+                                <TableCell className="text-[11px] py-1.5 font-mono">
+                                  {new Date(entry.timestamp).toLocaleString(
+                                    "en-GB",
+                                    {
+                                      year: "numeric",
+                                      month: "short",
+                                      day: "2-digit",
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    },
+                                  )}
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5">
+                                  <span
+                                    className={cn(
+                                      "text-[10px] font-semibold px-1.5 py-0.5 rounded border",
+                                      entry.fromStatus === "Approved"
+                                        ? "bg-green-50 text-green-700 border-green-200"
+                                        : entry.fromStatus === "Executed"
+                                          ? "bg-blue-50 text-blue-700 border-blue-200"
+                                          : "bg-gray-50 text-gray-600 border-gray-200",
+                                    )}
+                                  >
+                                    {entry.fromStatus}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5">
+                                  <span
+                                    className={cn(
+                                      "text-[10px] font-semibold px-1.5 py-0.5 rounded border",
+                                      entry.toStatus === "Approved"
+                                        ? "bg-green-50 text-green-700 border-green-200"
+                                        : entry.toStatus === "Executed"
+                                          ? "bg-blue-50 text-blue-700 border-blue-200"
+                                          : "bg-gray-50 text-gray-600 border-gray-200",
+                                    )}
+                                  >
+                                    {entry.toStatus}
+                                  </span>
+                                </TableCell>
+                                <TableCell className="text-[11px] py-1.5">
+                                  {entry.user}
+                                </TableCell>
+                                <TableCell
+                                  className="text-[11px] py-1.5 text-muted-foreground italic max-w-[140px] truncate"
+                                  title={entry.reason}
+                                >
+                                  {entry.reason}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                        </TableBody>
+                      </Table>
                     )}
                   </TabsContent>
 
@@ -3938,7 +4076,14 @@ export default function DataManager() {
                 </Select>
               </div>
               <div className="space-y-1">
-                <Label className="text-[11.5px]">Parent</Label>
+                <RequiredLabel
+                  label="Parent"
+                  required={isFieldRequired(
+                    newNode.entityType as EntityType,
+                    "parentId",
+                  )}
+                  className="text-[11.5px]"
+                />
                 <Select
                   value={newNode.parentId ?? "none"}
                   onValueChange={(v) =>
@@ -3972,33 +4117,74 @@ export default function DataManager() {
               </div>
             </div>
             <div className="space-y-1">
-              <Label className="text-[11.5px]">Identifier *</Label>
+              <RequiredLabel
+                label="Identifier"
+                required={isFieldRequired(
+                  newNode.entityType as EntityType,
+                  "identifier",
+                )}
+                htmlFor="new-identifier"
+                className="text-[11.5px]"
+              />
               <Input
+                id="new-identifier"
                 value={newNode.identifier}
                 onChange={(e) => {
-                  setNewNode((n) => ({ ...n, identifier: e.target.value }));
+                  const sanitized = sanitizeIdentifier(e.target.value);
+                  setNewNode((n) => ({ ...n, identifier: sanitized }));
                   if (newFormErrors.identifier)
                     setNewFormErrors((fe) => ({ ...fe, identifier: "" }));
+                  const fmtCheck = validateIdentifierFormat(sanitized);
+                  setIdentifierFormatError(
+                    fmtCheck.valid ? "" : fmtCheck.message,
+                  );
+                }}
+                onBlur={() => {
+                  const uniqCheck = validateIdentifierUniqueness(
+                    newNode.identifier,
+                    newNode.entityType as EntityType,
+                    nodes,
+                  );
+                  if (!uniqCheck.unique) {
+                    setNewFormErrors((fe) => ({
+                      ...fe,
+                      identifier: uniqCheck.message,
+                    }));
+                  }
                 }}
                 className={cn(
-                  "h-8 text-[12px]",
-                  newFormErrors.identifier && "border-destructive",
+                  "h-8 text-[12px] font-mono",
+                  (newFormErrors.identifier || identifierFormatError) &&
+                    "border-destructive",
                 )}
-                placeholder="e.g. EE-COAT-XY"
+                placeholder={
+                  IDENTIFIER_HINTS[newNode.entityType as EntityType]?.split(
+                    ": ",
+                  )[1] ?? "e.g. EQ-COAT-01"
+                }
                 data-ocid="data_manager.new_identifier.input"
               />
-              {newFormErrors.identifier && (
-                <p
-                  className="text-[11px] text-destructive"
-                  data-ocid="data_manager.new_identifier_error"
-                >
-                  {newFormErrors.identifier}
+              {(newFormErrors.identifier || identifierFormatError) && (
+                <p className="text-[11px] text-destructive mt-0.5">
+                  {newFormErrors.identifier || identifierFormatError}
                 </p>
               )}
+              <p className="text-[10.5px] text-muted-foreground">
+                {IDENTIFIER_HINTS[newNode.entityType as EntityType] ?? ""}
+              </p>
             </div>
             <div className="space-y-1">
-              <Label className="text-[11.5px]">Short Description *</Label>
+              <RequiredLabel
+                label="Short Description"
+                required={isFieldRequired(
+                  newNode.entityType as EntityType,
+                  "shortDescription",
+                )}
+                htmlFor="new-short-description"
+                className="text-[11.5px]"
+              />
               <Input
+                id="new-short-description"
                 value={newNode.shortDescription}
                 onChange={(e) => {
                   setNewNode((n) => ({
@@ -4037,24 +4223,54 @@ export default function DataManager() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-[11.5px]">Manufacturer</Label>
+                <RequiredLabel
+                  label="Manufacturer"
+                  required={isFieldRequired(
+                    newNode.entityType as EntityType,
+                    "manufacturer",
+                  )}
+                  className="text-[11.5px]"
+                />
                 <Input
                   value={newNode.manufacturer}
                   onChange={(e) =>
                     setNewNode((n) => ({ ...n, manufacturer: e.target.value }))
                   }
-                  className="h-8 text-[12px]"
+                  className={cn(
+                    "h-8 text-[12px]",
+                    newFormErrors.manufacturer && "border-destructive",
+                  )}
                 />
+                {newFormErrors.manufacturer && (
+                  <p className="text-[11px] text-destructive mt-0.5">
+                    {newFormErrors.manufacturer}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
-                <Label className="text-[11.5px]">Serial Number</Label>
+                <RequiredLabel
+                  label="Serial Number"
+                  required={isFieldRequired(
+                    newNode.entityType as EntityType,
+                    "serialNumber",
+                  )}
+                  className="text-[11.5px]"
+                />
                 <Input
                   value={newNode.serialNumber}
                   onChange={(e) =>
                     setNewNode((n) => ({ ...n, serialNumber: e.target.value }))
                   }
-                  className="h-8 text-[12px]"
+                  className={cn(
+                    "h-8 text-[12px]",
+                    newFormErrors.serialNumber && "border-destructive",
+                  )}
                 />
+                {newFormErrors.serialNumber && (
+                  <p className="text-[11px] text-destructive mt-0.5">
+                    {newFormErrors.serialNumber}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -4136,78 +4352,186 @@ export default function DataManager() {
 
       {/* GMP Validation Result Dialog */}
       <Dialog open={validateDialogOpen} onOpenChange={setValidateDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-[15px]">
               <Shield size={16} className="text-primary" /> GMP Validation
               Result
             </DialogTitle>
           </DialogHeader>
-          {validateResult && (
-            <div className="space-y-3 py-1">
-              <div
-                className={cn(
-                  "flex items-center gap-2 px-4 py-3 rounded-lg border text-[13px] font-semibold",
-                  validateResult.success
-                    ? "bg-green-50 text-green-700 border-green-200"
-                    : "bg-red-50 text-red-700 border-red-200",
+          <div className="space-y-3 py-1 max-h-[60vh] overflow-y-auto">
+            {validateResult && (
+              <>
+                <div
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-3 rounded-lg border text-[13px] font-semibold",
+                    validateResult.success
+                      ? "bg-green-50 text-green-700 border-green-200"
+                      : "bg-red-50 text-red-700 border-red-200",
+                  )}
+                >
+                  {validateResult.success ? (
+                    <CheckCircle2 size={16} />
+                  ) : (
+                    <XCircle size={16} />
+                  )}
+                  {validateResult.success
+                    ? "Equipment cleared for execution"
+                    : "Equipment BLOCKED — validation failed"}
+                </div>
+                {validateResult.errors.length > 0 && (
+                  <div>
+                    <p className="text-[11.5px] font-semibold text-destructive mb-1.5">
+                      Errors ({validateResult.errors.length}):
+                    </p>
+                    <ul className="space-y-1">
+                      {validateResult.errors.map((e) => (
+                        <li
+                          key={e}
+                          className="flex gap-2 text-[12px] text-destructive"
+                        >
+                          <XCircle size={13} className="shrink-0 mt-0.5" />
+                          {e}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
+                {validateResult.warnings.length > 0 && (
+                  <div>
+                    <p className="text-[11.5px] font-semibold text-amber-600 mb-1.5">
+                      Warnings ({validateResult.warnings.length}):
+                    </p>
+                    <ul className="space-y-1">
+                      {validateResult.warnings.map((w) => (
+                        <li
+                          key={w}
+                          className="flex gap-2 text-[12px] text-amber-700"
+                        >
+                          <span className="shrink-0">⚠</span>
+                          {w}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {validateResult.success &&
+                  validateResult.warnings.length === 0 && (
+                    <p className="text-[12px] text-muted-foreground">
+                      All GMP checks passed. No warnings.
+                    </p>
+                  )}
+              </>
+            )}
+            {/* Interlock engine results */}
+            {interlockValidationResult && (
+              <>
+                <div className="h-px bg-border my-2" />
+                <p className="text-[12px] font-semibold text-foreground flex items-center gap-1.5">
+                  <ClipboardList size={13} /> Interlock Engine Result
+                </p>
+                {interlockValidationResult.interlockResult.status ===
+                  "BLOCKED" && (
+                  <div className="px-3 py-2.5 rounded-lg bg-red-50 border border-red-200 text-[12px] text-red-800">
+                    <p className="font-semibold mb-1.5">
+                      Execution blocked due to:
+                    </p>
+                    <ul className="space-y-1">
+                      {interlockValidationResult.interlockResult.interlocks
+                        .filter((i) => i.type === "HARD")
+                        .map((il) => (
+                          <li
+                            key={il.message}
+                            className="flex items-start gap-2"
+                          >
+                            <XCircle
+                              size={12}
+                              className="shrink-0 mt-0.5 text-red-600"
+                            />
+                            <span>{il.message}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+                {interlockValidationResult.interlockResult.interlocks.filter(
+                  (i) => i.type === "SOFT",
+                ).length > 0 && (
+                  <div className="px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[12px] text-amber-800">
+                    <p className="font-semibold mb-1.5">
+                      Soft interlocks (warnings):
+                    </p>
+                    <ul className="space-y-1">
+                      {interlockValidationResult.interlockResult.interlocks
+                        .filter((i) => i.type === "SOFT")
+                        .map((il) => (
+                          <li
+                            key={il.message}
+                            className="flex items-start gap-2"
+                          >
+                            <AlertTriangle
+                              size={12}
+                              className="shrink-0 mt-0.5 text-amber-600"
+                            />
+                            <span>{il.message}</span>
+                          </li>
+                        ))}
+                    </ul>
+                  </div>
+                )}
+                {interlockValidationResult.interlockResult.status === "OK" && (
+                  <div className="px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-[12px] text-green-700 font-medium">
+                    <CheckCircle2 size={13} className="inline mr-1.5" />
+                    All interlocks cleared
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            {/* Perform Cleaning button — shown when cleaning interlock present */}
+            {interlockValidationResult?.interlockResult.interlocks.some(
+              (i) => i.category === "CLEANING",
+            ) && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 gap-1 text-[12px] text-teal-700 border-teal-300 hover:bg-teal-50"
+                onClick={() => {
+                  setValidateDialogOpen(false);
+                  toast.info(
+                    "Navigate to the Cleaning tab to log a cleaning event",
+                  );
+                }}
+                data-ocid="data_manager.perform_cleaning_button"
               >
-                {validateResult.success ? (
-                  <CheckCircle2 size={16} />
-                ) : (
-                  <XCircle size={16} />
-                )}
-                {validateResult.success
-                  ? "Equipment cleared for execution"
-                  : "Equipment BLOCKED — validation failed"}
-              </div>
-              {validateResult.errors.length > 0 && (
-                <div>
-                  <p className="text-[11.5px] font-semibold text-destructive mb-1.5">
-                    Errors ({validateResult.errors.length}):
-                  </p>
-                  <ul className="space-y-1">
-                    {validateResult.errors.map((e) => (
-                      <li
-                        key={e}
-                        className="flex gap-2 text-[12px] text-destructive"
-                      >
-                        <XCircle size={13} className="shrink-0 mt-0.5" />
-                        {e}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                <ClipboardList size={13} /> Perform Cleaning
+              </Button>
+            )}
+            {/* Override soft interlocks button */}
+            {interlockValidationResult &&
+              !interlockValidationResult.blocked &&
+              interlockValidationResult.interlockResult.interlocks.some(
+                (i) => i.type === "SOFT" && i.allowOverride,
+              ) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1 text-[12px] text-amber-700 border-amber-300 hover:bg-amber-50"
+                  onClick={() => {
+                    setOverrideReason("");
+                    setOverrideReasonDialogOpen(true);
+                  }}
+                  data-ocid="data_manager.override_soft_interlocks_button"
+                >
+                  <AlertTriangle size={13} /> Override Soft Interlocks
+                </Button>
               )}
-              {validateResult.warnings.length > 0 && (
-                <div>
-                  <p className="text-[11.5px] font-semibold text-amber-600 mb-1.5">
-                    Warnings ({validateResult.warnings.length}):
-                  </p>
-                  <ul className="space-y-1">
-                    {validateResult.warnings.map((w) => (
-                      <li
-                        key={w}
-                        className="flex gap-2 text-[12px] text-amber-700"
-                      >
-                        <span className="shrink-0">⚠</span>
-                        {w}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {validateResult.success &&
-                validateResult.warnings.length === 0 && (
-                  <p className="text-[12px] text-muted-foreground">
-                    All GMP checks passed. No warnings.
-                  </p>
-                )}
-            </div>
-          )}
-          <DialogFooter>
-            <Button size="sm" onClick={() => setValidateDialogOpen(false)}>
+            <Button
+              size="sm"
+              onClick={() => setValidateDialogOpen(false)}
+              data-ocid="data_manager.validate_dialog.close_button"
+            >
               Close
             </Button>
           </DialogFooter>
@@ -4486,6 +4810,381 @@ export default function DataManager() {
               data-ocid="data_manager.execute.confirm_button"
             >
               <CheckCircle2 size={13} /> Confirm Execution
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approve Reason Dialog */}
+      <Dialog
+        open={approveReasonDialogOpen}
+        onOpenChange={setApproveReasonDialogOpen}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.approve_reason.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <Shield size={15} className="text-green-600" /> Approve Record
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-green-50 border border-green-200 rounded-lg text-[12px] text-green-800">
+              <CheckCircle2
+                size={13}
+                className="shrink-0 mt-0.5 text-green-600"
+              />
+              <span>
+                Approving this record will make it <strong>read-only</strong>{" "}
+                and eligible for batch execution.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <RequiredLabel
+                label="Reason for Approval"
+                required
+                htmlFor="approve-reason"
+                className="text-[12px]"
+              />
+              <Textarea
+                id="approve-reason"
+                value={approveReason}
+                onChange={(e) => setApproveReason(e.target.value)}
+                placeholder="Enter reason for approving this record..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.approve_reason.textarea"
+              />
+              {approveReason.trim() === "" && (
+                <p className="text-[11px] text-muted-foreground">
+                  Reason is mandatory for GMP compliance.
+                </p>
+              )}
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setApproveReasonDialogOpen(false)}
+              data-ocid="data_manager.approve_reason.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1 bg-green-600 hover:bg-green-700 text-white"
+              onClick={handleConfirmApprove}
+              disabled={!approveReason.trim()}
+              data-ocid="data_manager.approve_reason.confirm_button"
+            >
+              <CheckCircle2 size={13} /> Approve
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Reason Dialog */}
+      <Dialog
+        open={deleteReasonDialogOpen}
+        onOpenChange={setDeleteReasonDialogOpen}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.delete_reason.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px] text-destructive">
+              <Trash2 size={15} className="text-destructive" /> Delete Record
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-red-50 border border-red-200 rounded-lg text-[12px] text-red-800">
+              <AlertTriangle
+                size={13}
+                className="shrink-0 mt-0.5 text-red-600"
+              />
+              <span>
+                This action <strong>cannot be undone</strong>. The record will
+                be permanently removed.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <RequiredLabel
+                label="Reason for Deletion"
+                required
+                htmlFor="delete-reason"
+                className="text-[12px]"
+              />
+              <Textarea
+                id="delete-reason"
+                value={deleteReason}
+                onChange={(e) => setDeleteReason(e.target.value)}
+                placeholder="Enter reason for deleting this record..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.delete_reason.textarea"
+              />
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setDeleteReasonDialogOpen(false)}
+              data-ocid="data_manager.delete_reason.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="gap-1"
+              onClick={handleConfirmDelete}
+              disabled={!deleteReason.trim()}
+              data-ocid="data_manager.delete_reason.confirm_button"
+            >
+              <Trash2 size={13} /> Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Copy as Draft Dialog */}
+      <Dialog open={copyDraftDialogOpen} onOpenChange={setCopyDraftDialogOpen}>
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.copy_draft.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px]">
+              <Copy size={15} className="text-indigo-600" /> Copy as Draft
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-indigo-50 border border-indigo-200 rounded-lg text-[12px] text-indigo-800">
+              <Copy size={13} className="shrink-0 mt-0.5 text-indigo-600" />
+              <span>
+                A new <strong>Draft</strong> record will be created with a new
+                identifier. Configuration fields will be copied. Approval and
+                cleaning data will be reset.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <RequiredLabel
+                label="Reason for Copy"
+                required
+                htmlFor="copy-draft-reason"
+                className="text-[12px]"
+              />
+              <Textarea
+                id="copy-draft-reason"
+                value={copyDraftReason}
+                onChange={(e) => setCopyDraftReason(e.target.value)}
+                placeholder="e.g. Creating variant for new product campaign..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.copy_draft_reason.textarea"
+              />
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCopyDraftDialogOpen(false)}
+              data-ocid="data_manager.copy_draft.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+              onClick={handleConfirmCopyAsDraft}
+              disabled={!copyDraftReason.trim()}
+              data-ocid="data_manager.copy_draft.confirm_button"
+            >
+              <Copy size={13} /> Create Draft Copy
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Override Interlock Reason Dialog */}
+      <Dialog
+        open={overrideReasonDialogOpen}
+        onOpenChange={setOverrideReasonDialogOpen}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.override_reason.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px] text-amber-700">
+              <AlertTriangle size={15} className="text-amber-600" /> Override
+              Soft Interlocks
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[12px] text-amber-800">
+              <AlertTriangle
+                size={13}
+                className="shrink-0 mt-0.5 text-amber-600"
+              />
+              <span>
+                This override will be <strong>logged in the audit trail</strong>
+                . Proceed only if you have authorization.
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              <RequiredLabel
+                label="Override Reason"
+                required
+                htmlFor="override-reason"
+                className="text-[12px]"
+              />
+              <Textarea
+                id="override-reason"
+                value={overrideReason}
+                onChange={(e) => setOverrideReason(e.target.value)}
+                placeholder="Enter mandatory reason for overriding soft interlocks..."
+                className="text-[12px] min-h-[80px] resize-none"
+                data-ocid="data_manager.override_reason.textarea"
+              />
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setOverrideReasonDialogOpen(false)}
+              data-ocid="data_manager.override_reason.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1 bg-amber-600 hover:bg-amber-700 text-white"
+              onClick={handleConfirmOverride}
+              disabled={!overrideReason.trim()}
+              data-ocid="data_manager.override_reason.confirm_button"
+            >
+              <AlertTriangle size={13} /> Confirm Override
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Log Cleaning Event Dialog */}
+      <Dialog
+        open={cleaningEventDialogOpen}
+        onOpenChange={setCleaningEventDialogOpen}
+      >
+        <DialogContent
+          className="max-w-md"
+          data-ocid="data_manager.cleaning_event.dialog"
+        >
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-[15px] text-teal-700">
+              <ClipboardList size={15} className="text-teal-600" /> Log Cleaning
+              Event
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <RequiredLabel
+                  label="Cleaned By"
+                  required
+                  htmlFor="ce-cleaned-by"
+                  className="text-[11.5px]"
+                />
+                <Input
+                  id="ce-cleaned-by"
+                  value={cleaningEventForm.cleanedBy}
+                  onChange={(e) =>
+                    setCleaningEventForm((f) => ({
+                      ...f,
+                      cleanedBy: e.target.value,
+                    }))
+                  }
+                  className="h-8 text-[12px]"
+                  data-ocid="data_manager.cleaning_event_cleaned_by.input"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-[11.5px]">Product Code</Label>
+                <Input
+                  value={cleaningEventForm.productCode}
+                  onChange={(e) =>
+                    setCleaningEventForm((f) => ({
+                      ...f,
+                      productCode: e.target.value,
+                    }))
+                  }
+                  className="h-8 text-[12px] font-mono"
+                  placeholder="e.g. PRD-AMX-001"
+                  data-ocid="data_manager.cleaning_event_product.input"
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <RequiredLabel
+                label="Cleaning Reason"
+                required
+                htmlFor="ce-reason"
+                className="text-[11.5px]"
+              />
+              <Textarea
+                id="ce-reason"
+                value={cleaningEventForm.cleaningReason}
+                onChange={(e) =>
+                  setCleaningEventForm((f) => ({
+                    ...f,
+                    cleaningReason: e.target.value,
+                  }))
+                }
+                placeholder="e.g. Product changeover, campaign complete..."
+                className="text-[12px] min-h-[70px] resize-none"
+                data-ocid="data_manager.cleaning_event_reason.textarea"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11.5px]">Valid Till</Label>
+              <Input
+                type="date"
+                value={cleaningEventForm.validTill}
+                onChange={(e) =>
+                  setCleaningEventForm((f) => ({
+                    ...f,
+                    validTill: e.target.value,
+                  }))
+                }
+                className="h-8 text-[12px]"
+                data-ocid="data_manager.cleaning_event_valid_till.input"
+              />
+            </div>
+          </div>
+          <Separator />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCleaningEventDialogOpen(false)}
+              data-ocid="data_manager.cleaning_event.cancel_button"
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="gap-1 bg-teal-600 hover:bg-teal-700 text-white"
+              onClick={handleConfirmCleaningEvent}
+              disabled={!cleaningEventForm.cleaningReason.trim()}
+              data-ocid="data_manager.cleaning_event.confirm_button"
+            >
+              <ClipboardList size={13} /> Log Cleaning Event
             </Button>
           </DialogFooter>
         </DialogContent>

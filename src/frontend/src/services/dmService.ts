@@ -192,8 +192,13 @@ export function updateDMRecord(
 
 /**
  * Delete a DM record (only allowed for Draft, not in batch).
+ * Accepts an optional reason for the audit trail.
  */
-export function deleteDMRecord(id: string, user: string): void {
+export function deleteDMRecord(
+  id: string,
+  user: string,
+  reason?: string,
+): void {
   try {
     const nodes = loadNodes();
     const target = nodes.find((n) => n.id === id);
@@ -215,7 +220,9 @@ export function deleteDMRecord(id: string, user: string): void {
       id,
       target.shortDescription,
       user,
-      `Deleted record: ${target.identifier}`,
+      reason
+        ? `Deleted record: ${target.identifier} — Reason: ${reason}`
+        : `Deleted record: ${target.identifier}`,
     );
   } catch (err) {
     throw new Error(String(err));
@@ -224,8 +231,13 @@ export function deleteDMRecord(id: string, user: string): void {
 
 /**
  * Approve a DM record (Draft → Approved).
+ * Accepts an optional reason for the audit trail.
  */
-export function approveDMRecord(id: string, user: string): EquipmentNode {
+export function approveDMRecord(
+  id: string,
+  user: string,
+  reason?: string,
+): EquipmentNode {
   try {
     const nodes = loadNodes();
     const idx = nodes.findIndex((n) => n.id === id);
@@ -250,13 +262,19 @@ export function approveDMRecord(id: string, user: string): EquipmentNode {
           newValue: "Approved",
           changedBy: user,
           action: "Update" as const,
-          reason: "GMP Status Approval",
+          reason: reason || "Approved by user",
         },
       ],
     };
     nodes[idx] = updated;
     saveNodes(nodes);
-    logAudit("Approve", id, updated.shortDescription, user, "Record approved");
+    logAudit(
+      "Approve",
+      id,
+      updated.shortDescription,
+      user,
+      reason ? `Record approved — Reason: ${reason}` : "Record approved",
+    );
     return updated;
   } catch (err) {
     throw new Error(String(err));

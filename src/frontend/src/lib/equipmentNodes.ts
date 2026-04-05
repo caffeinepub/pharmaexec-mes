@@ -33,6 +33,32 @@ export interface ChangeEntry {
   reason?: string;
 }
 
+// ── New MES types ─────────────────────────────────────────────────────────
+export type LogbookAction =
+  | "Execution Start"
+  | "Execution Stop"
+  | "Cleaning"
+  | "Pause"
+  | "Resume";
+
+export interface LogbookEntry {
+  id: string;
+  timestamp: string;
+  user: string;
+  action: LogbookAction;
+  reason: string;
+  statusChange?: string; // e.g. "Draft → Approved", "Approved → Executed"
+  details?: string;
+}
+
+export interface StatusHistoryEntry {
+  timestamp: string;
+  user: string;
+  fromStatus: string;
+  toStatus: string;
+  reason: string;
+}
+
 export interface EquipmentNode {
   id: string;
   identifier: string;
@@ -94,6 +120,17 @@ export interface EquipmentNode {
   lastProductUsed?: string; // productCode
   cleaningReason?: string; // required for Fixed equipment
   currentCampaignBatches?: number; // batches completed in current campaign
+  // Context tab fields
+  currentBatchId?: string;
+  currentBatchStatus?: string;
+  lastBatch?: string;
+  lastExecutionDate?: string;
+  // Specification simplified fields
+  cleaningType?: "CIP" | "Manual" | "None";
+  requiresCleaning?: boolean;
+  // New tracking structures
+  logbookEntries?: LogbookEntry[];
+  statusHistory?: StatusHistoryEntry[];
 }
 
 export const INITIAL_DATA: EquipmentNode[] = [
@@ -402,6 +439,73 @@ export const INITIAL_DATA: EquipmentNode[] = [
     lastProductUsed: "PRD-AMX-001",
     cleaningReason: "Product changeover - end of Amoxicillin campaign",
     currentCampaignBatches: 5,
+    // Context tab
+    currentBatchId: "B-2026-001",
+    currentBatchStatus: "In Process",
+    lastBatch: "B-2025-042",
+    lastExecutionDate: "2026-03-20",
+    // Specification simplified
+    cleaningType: "CIP",
+    requiresCleaning: true,
+    // Logbook — rich entries with new action types
+    logbookEntries: [
+      {
+        id: "lb-ee1-1",
+        timestamp: "2026-03-18T07:15:00Z",
+        user: "Operator J. Patel",
+        action: "Execution Start",
+        reason: "Batch B-2026-001 started — Amoxicillin 250mg film coating",
+        statusChange: "Approved → Executed",
+        details: "Recipe RC-AMX-FC-001 v3",
+      },
+      {
+        id: "lb-ee1-2",
+        timestamp: "2026-03-18T11:30:00Z",
+        user: "Operator J. Patel",
+        action: "Pause",
+        reason: "Scheduled break — equipment cooling required",
+      },
+      {
+        id: "lb-ee1-3",
+        timestamp: "2026-03-18T12:45:00Z",
+        user: "Operator J. Patel",
+        action: "Resume",
+        reason: "Cooling complete, resumed coating process",
+      },
+      {
+        id: "lb-ee1-4",
+        timestamp: "2026-03-19T16:00:00Z",
+        user: "Dr. Sarah Chen",
+        action: "Execution Stop",
+        reason: "Batch B-2026-001 coating complete",
+        statusChange: "Executed → Approved",
+      },
+      {
+        id: "lb-ee1-5",
+        timestamp: "2026-03-20T08:00:00Z",
+        user: "Dr. Sarah Chen",
+        action: "Cleaning",
+        reason: "Major CIP cleaning after Amoxicillin campaign",
+        details: "CIP Level: Major, Valid till 2026-04-20",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2025-06-01T09:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "Initial qualification complete, GMP approved",
+      },
+      {
+        timestamp: "2026-04-01T10:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Approved",
+        toStatus: "Executed",
+        reason: "Batch Execution B-2026-001 confirmed",
+      },
+    ],
   },
   // ee2: Draft, Active, Good, PM Due Soon — yellow
   {
@@ -437,6 +541,47 @@ export const INITIAL_DATA: EquipmentNode[] = [
     pm_due_date: "2026-04-09",
     cleaningRules: [],
     cleaningLog: null,
+    // Context tab
+    lastBatch: "B-2025-031",
+    lastExecutionDate: "2026-01-15",
+    // Specification simplified
+    cleaningType: "Manual",
+    requiresCleaning: true,
+    // Logbook
+    logbookEntries: [
+      {
+        id: "lb-ee2-1",
+        timestamp: "2026-01-14T08:00:00Z",
+        user: "Operator M. Torres",
+        action: "Execution Start",
+        reason: "Batch B-2025-031 Metformin 500mg coating",
+        statusChange: "Draft → Approved",
+      },
+      {
+        id: "lb-ee2-2",
+        timestamp: "2026-01-15T14:30:00Z",
+        user: "Operator M. Torres",
+        action: "Execution Stop",
+        reason: "Batch B-2025-031 complete",
+      },
+      {
+        id: "lb-ee2-3",
+        timestamp: "2026-01-16T09:00:00Z",
+        user: "Operator M. Torres",
+        action: "Cleaning",
+        reason: "Manual cleaning between batches",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2025-09-10T10:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Approved",
+        toStatus: "Draft",
+        reason: "Converted to Draft for PM schedule update",
+      },
+    ],
   },
   // ee3: Approved, Under Maintenance, Bad, PM Overdue — red
   {
@@ -481,6 +626,62 @@ export const INITIAL_DATA: EquipmentNode[] = [
     cleaningValidTill: "2026-01-03T08:00:00Z",
     lastProductUsed: "PRD-OMP-003",
     currentCampaignBatches: 4,
+    // Context tab
+    lastBatch: "B-2025-028",
+    lastExecutionDate: "2025-12-10",
+    // Specification simplified
+    cleaningType: "CIP",
+    requiresCleaning: true,
+    // Logbook
+    logbookEntries: [
+      {
+        id: "lb-ee3-1",
+        timestamp: "2025-12-08T09:00:00Z",
+        user: "Operator K. Sharma",
+        action: "Execution Start",
+        reason: "Batch B-2025-028 Omeprazole coating",
+        statusChange: "Draft → Approved",
+      },
+      {
+        id: "lb-ee3-2",
+        timestamp: "2025-12-09T14:00:00Z",
+        user: "Operator K. Sharma",
+        action: "Pause",
+        reason: "Equipment issue — spray nozzle blockage",
+      },
+      {
+        id: "lb-ee3-3",
+        timestamp: "2025-12-10T11:00:00Z",
+        user: "Operator K. Sharma",
+        action: "Execution Stop",
+        reason: "Batch aborted — equipment under maintenance",
+        statusChange: "Approved → Under Maintenance",
+      },
+      {
+        id: "lb-ee3-4",
+        timestamp: "2026-01-01T08:00:00Z",
+        user: "Maintenance Team",
+        action: "Cleaning",
+        reason: "Pre-maintenance CIP cleaning",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2024-08-15T08:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "GMP qualification approved after calibration",
+      },
+      {
+        timestamp: "2026-03-20T09:00:00Z",
+        user: "Engineer R. Patel",
+        fromStatus: "Approved",
+        toStatus: "Approved",
+        reason: "Placed Under Maintenance — PM overdue, cleaning expired",
+      },
+    ],
   },
   // ee4: Approved, Active, Good, PM OK, cleaning Required — red
   {
@@ -546,8 +747,74 @@ export const INITIAL_DATA: EquipmentNode[] = [
     lastProductUsed: "PRD-AMX-001",
     cleaningReason: "Routine inter-batch cleaning",
     currentCampaignBatches: 3,
+    // Context tab
+    currentBatchId: "B-2026-003",
+    currentBatchStatus: "Released",
+    lastBatch: "B-2026-001",
+    lastExecutionDate: "2026-03-28",
+    // Specification simplified
+    cleaningType: "CIP",
+    requiresCleaning: true,
+    // Logbook
+    logbookEntries: [
+      {
+        id: "lb-ee4-1",
+        timestamp: "2026-03-26T07:00:00Z",
+        user: "Operator J. Patel",
+        action: "Execution Start",
+        reason: "Batch B-2026-003 Atorvastatin coating started",
+        statusChange: "Approved → Executed",
+        details: "Auto-coater recipe v2",
+      },
+      {
+        id: "lb-ee4-2",
+        timestamp: "2026-03-27T10:00:00Z",
+        user: "Operator J. Patel",
+        action: "Pause",
+        reason: "Mid-batch inspection hold",
+      },
+      {
+        id: "lb-ee4-3",
+        timestamp: "2026-03-27T11:30:00Z",
+        user: "QA Dr. R. Mehta",
+        action: "Resume",
+        reason: "Inspection passed, resumed",
+      },
+      {
+        id: "lb-ee4-4",
+        timestamp: "2026-03-28T15:00:00Z",
+        user: "Dr. Sarah Chen",
+        action: "Execution Stop",
+        reason: "Batch B-2026-003 released",
+        statusChange: "Executed → Approved",
+      },
+      {
+        id: "lb-ee4-5",
+        timestamp: "2026-03-28T16:00:00Z",
+        user: "Operator J. Patel",
+        action: "Cleaning",
+        reason: "Inter-batch CIP — minor level",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2024-03-10T10:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "GMP validation passed, IQ/OQ/PQ complete",
+      },
+      {
+        timestamp: "2026-01-20T09:00:00Z",
+        user: "Engineer R. Patel",
+        fromStatus: "Approved",
+        toStatus: "Draft",
+        reason: "PM maintenance window — temporary draft for PM update",
+      },
+    ],
   },
-  // ee5: Draft, Active, Good, PM OK, cleaning OK — green
+  // ee5: Executed, Active, Good, PM OK, cleaning OK — green
   {
     id: "ee5",
     identifier: "EE-COAT-AM",
@@ -597,6 +864,65 @@ export const INITIAL_DATA: EquipmentNode[] = [
     cleaningValidTill: "2026-04-30T09:00:00Z",
     lastProductUsed: "PRD-MET-002",
     currentCampaignBatches: 2,
+    // Context tab
+    currentBatchId: "B-2026-002",
+    currentBatchStatus: "Completed",
+    lastBatch: "B-2025-040",
+    lastExecutionDate: "2026-03-15",
+    // Specification simplified
+    cleaningType: "Manual",
+    requiresCleaning: false,
+    // Logbook
+    logbookEntries: [
+      {
+        id: "lb-ee5-1",
+        timestamp: "2026-03-13T08:00:00Z",
+        user: "Operator M. Torres",
+        action: "Execution Start",
+        reason: "Batch B-2026-002 Paracetamol membrane coating",
+        statusChange: "Approved → Executed",
+      },
+      {
+        id: "lb-ee5-2",
+        timestamp: "2026-03-15T12:00:00Z",
+        user: "Operator M. Torres",
+        action: "Execution Stop",
+        reason: "Batch B-2026-002 completed",
+        statusChange: "Executed → Approved",
+      },
+      {
+        id: "lb-ee5-3",
+        timestamp: "2026-03-15T14:00:00Z",
+        user: "Dr. Sarah Chen",
+        action: "Cleaning",
+        reason: "Major cleaning — Paracetamol campaign end",
+        details: "Valid till 2026-04-30",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2024-04-20T10:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "Initial GMP qualification complete",
+      },
+      {
+        timestamp: "2026-01-05T11:00:00Z",
+        user: "Operator B. Nguyen",
+        fromStatus: "Approved",
+        toStatus: "Draft",
+        reason: "Re-qualification after equipment relocation",
+      },
+      {
+        timestamp: "2026-03-15T09:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Executed",
+        reason: "Batch B-2026-002 executed successfully",
+      },
+    ],
   },
   // ee6: Approved, Active, Bad, PM Overdue — red
   {
@@ -640,6 +966,48 @@ export const INITIAL_DATA: EquipmentNode[] = [
     cleaningValidTill: "2026-02-03T08:00:00Z",
     lastProductUsed: "PRD-CIP-005",
     currentCampaignBatches: 3,
+    // Context tab
+    lastBatch: "B-2025-050",
+    lastExecutionDate: "2026-02-01",
+    // Specification simplified
+    cleaningType: "CIP",
+    requiresCleaning: true,
+    // Logbook
+    logbookEntries: [
+      {
+        id: "lb-ee6-1",
+        timestamp: "2026-01-30T07:30:00Z",
+        user: "Operator K. Sharma",
+        action: "Execution Start",
+        reason: "Batch B-2025-050 Ciprofloxacin coating",
+        statusChange: "Draft → Approved",
+      },
+      {
+        id: "lb-ee6-2",
+        timestamp: "2026-02-01T16:00:00Z",
+        user: "Operator K. Sharma",
+        action: "Execution Stop",
+        reason: "Batch complete",
+      },
+      {
+        id: "lb-ee6-3",
+        timestamp: "2026-02-01T17:00:00Z",
+        user: "Maintenance Team",
+        action: "Cleaning",
+        reason: "Post-batch CIP cleaning — Minor level",
+        details: "Valid till 2026-02-03 (expired)",
+      },
+    ],
+    // Status history
+    statusHistory: [
+      {
+        timestamp: "2024-05-15T10:00:00Z",
+        user: "Dr. Sarah Chen",
+        fromStatus: "Draft",
+        toStatus: "Approved",
+        reason: "IQ/OQ/PQ validation complete, equipment qualified",
+      },
+    ],
   },
   {
     id: "pt1",
